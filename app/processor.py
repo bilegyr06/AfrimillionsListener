@@ -15,6 +15,23 @@ def _build_message(user: InactiveUser) -> str:
     return f"Hi {user.first_name}, we miss you! Log in to AfriMillions to keep playing."
 
 
+def _normalize_phone(raw) -> str | None:
+    """Convert stored phone numbers to Termii international format.
+
+    Returns the normalized number (e.g. 07870665161 -> 2347870665161) or
+    None if the value is not a usable phone number.
+    """
+    digits = "".join(ch for ch in str(raw) if ch.isdigit())
+
+    if digits.startswith("0") and len(digits) == 11:
+        return "234" + digits[1:]
+    if digits.startswith("234") and len(digits) == 13:
+        return digits
+    if digits.startswith("233") and len(digits) == 12:
+        return digits
+    return None
+
+
 def _load_csv(pattern: str) -> pd.DataFrame:
     files = glob.glob(str(settings.DATA_FOLDER / pattern))
     if not files:
@@ -88,8 +105,8 @@ def find_inactive_users(logins_df: pd.DataFrame | None = None) -> list[InactiveU
             if settings.MAX_MESSAGES > 0 and record["notification_count"] >= settings.MAX_MESSAGES:
                 continue
 
-        phone = str(row.get("phone", "")).strip()
-        if not phone or phone == "nan":
+        phone = _normalize_phone(row.get("phone", ""))
+        if phone is None:
             continue
 
         results.append(
