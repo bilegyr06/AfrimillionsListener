@@ -1,12 +1,14 @@
+import asyncio
 import glob
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
+from app import state
 from app.config import settings
 from app.database import get_all_notified, reset_user, upsert_notified_records
-from app.models import InactiveUser
 from app.messager import send_sms
+from app.models import InactiveUser
 
 
 def _build_message(user: InactiveUser) -> str:
@@ -25,18 +27,13 @@ def reset_active_users(logins_df: pd.DataFrame):
     """Users who have logged in within the inactivity window get their
     notification state cleared, so their cycle restarts from zero."""
     notified = get_all_notified()
-    if not notified:
+    if not notified or logins_df.empty:
         return
 
     now_naive = datetime.now()
     cutoff = now_naive - timedelta(hours=settings.INACTIVITY_HOURS)
 
-    if logins_df.empty:
-        return
-
-    recent_logins = (
-        logins_df[logins_df["timestamp"] >= cutoff]["userId"].unique()
-    )
+    recent_logins = logins_df[logins_df["timestamp"] >= cutoff]["userId"].unique()
 
     reset_count = 0
     for user_id in recent_logins:
@@ -48,8 +45,9 @@ def reset_active_users(logins_df: pd.DataFrame):
         print(f"Reset {reset_count} user(s) who logged back in.")
 
 
-def find_inactive_users() -> list[InactiveUser]:
-    logins_df = _load_csv(settings.LOGIN_FILE_PATTERN)
+def find_inactive_users(logins_df: pd.DataFrame | None = None) -> list[InactiveUser]:
+    if logins_df is None:
+        logins_df = _load_csv(settings.LOGIN_FILE_PATTERN)
     regs_df = _load_csv(settings.REGISTRATION_FILE_PATTERN)
 
     if logins_df.empty or regs_df.empty:
@@ -107,32 +105,82 @@ def find_inactive_users() -> list[InactiveUser]:
     return results
 
 
-def notify_inactive_users() -> dict:
+async def run_cycle_async() -> dict:
+    """Run a full notification cycle as an async task. Cancellable via task.cancel()."""
+    state.cancel_requested = False
+
+    try:
+        return await notify_inactive_users()
+    except asyncio.CancelledError:
+        print("Notification cycle cancelled.")
+        return {"message": "Notification cycle cancelled.", "count": 0, "cancelled": True}
+
+
+def begin_cycle() -> bool:
+    """Start a new cycle as an asyncio task. Returns False if one is already running."""
+    if state.current_task is not None and not state.current_task.done():
+        return False
+
+    task = asyncio.create_task(run_cycle_async())
+    state.current_task = task
+
+    def _on_done(t: asyncio.Task):
+        if state.current_task is t:
+            state.current_task = None
+
+    task.add_done_callback(_on_done)
+    return True
+
+
+async def notify_inactive_users() -> dict:
     logins_df = _load_csv(settings.LOGIN_FILE_PATTERN)
     reset_active_users(logins_df)
 
-    users = find_inactive_users()
+    users = find_inactive_users(logins_df)
     if not users:
         return {"message": "No inactive users to notify.", "count": 0}
 
-    sent = 0
-    failed = 0
-    records = []
-    for user in users:
-        result = send_sms(user.phone, _build_message(user))
-        if result:
-            records.append(
-                {
-                    "user_id": user.user_id,
-                    "phone": user.phone,
-                    "is_new": user.is_new,
-                }
-            )
-            sent += 1
-        else:
-            failed += 1
+    sem = asyncio.Semaphore(settings.MAX_CONCURRENCY)
+    completed: list[tuple[InactiveUser, dict | None]] = []
 
+    async def worker(user: InactiveUser) -> None:
+        if state.cancel_requested:
+            return
+        async with sem:
+            if state.cancel_requested:
+                return
+            result = await send_sms(user.phone, _build_message(user))
+            completed.append((user, result))
+
+    tasks = [asyncio.create_task(worker(user)) for user in users]
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        # Record whatever already succeeded before surfacing cancellation.
+        _persist_successes(completed)
+        raise
+
+    _persist_successes(completed)
+
+    sent = sum(1 for _, result in completed if result)
+    failed = sum(1 for _, result in completed if not result)
+    return {
+        "message": f"Notified {sent} user(s).",
+        "count": sent,
+        "failed": failed,
+        "cancelled": False,
+    }
+
+
+def _persist_successes(completed: list[tuple[InactiveUser, dict | None]]):
+    records = [
+        {
+            "user_id": user.user_id,
+            "phone": user.phone,
+            "is_new": user.is_new,
+        }
+        for user, result in completed
+        if result
+    ]
     if records:
         upsert_notified_records(records, settings.COOLDOWN_HOURS)
-
-    return {"message": f"Notified {sent} user(s).", "count": sent, "failed": failed}
