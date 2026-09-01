@@ -14,6 +14,8 @@ class Settings:
     INACTIVITY_HOURS: int = int(os.getenv("INACTIVITY_HOURS", 48))
     COOLDOWN_HOURS: int = int(os.getenv("COOLDOWN_HOURS", 24))
     MAX_MESSAGES: int = int(os.getenv("MAX_MESSAGES", 0))  # 0 = unlimited
+    MAX_CONCURRENCY: int = int(os.getenv("MAX_CONCURRENCY", 50))  # parallel SMS sends
+    SMS_TIMEOUT: float = float(os.getenv("SMS_TIMEOUT", 30))
 
     DATA_FOLDER: Path = BASE_DIR / os.getenv("DATA_FOLDER", "data")
     DB_PATH: Path = BASE_DIR / os.getenv("DB_PATH", "app/notified_users.db")
