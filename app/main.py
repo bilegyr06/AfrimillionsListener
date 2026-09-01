@@ -3,13 +3,19 @@ import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from pydantic import BaseModel, Field
 
 from app import state
 from app.config import settings
 from app.database import init_db
-from app.messager import aclose_client
+from app.messager import aclose_client, send_sms
 from app.processor import begin_cycle
 from app.watcher import start_watcher
+
+
+class SMSRequest(BaseModel):
+    phone: str = Field(..., min_length=7, description="Recipient phone number")
+    message: str = Field(..., min_length=1, max_length=160, description="SMS text")
 
 
 @asynccontextmanager
@@ -43,6 +49,14 @@ app = FastAPI(title="Afrimillions Inactivity Listener", lifespan=lifespan)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.post("/sms")
+async def send_custom_sms(req: SMSRequest):
+    result = await send_sms(req.phone, req.message)
+    if result:
+        return {"message": "SMS sent.", "phone": req.phone, "response": result}
+    return {"message": "SMS delivery failed.", "phone": req.phone}
 
 
 @app.post("/trigger")
