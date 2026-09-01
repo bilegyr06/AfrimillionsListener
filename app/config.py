@@ -9,7 +9,7 @@ load_dotenv(BASE_DIR / ".env")
 class Settings:
     TERMII_API_KEY: str = os.getenv("TERMII_API_KEY", "")
     TERMII_SENDER_ID: str = os.getenv("TERMII_SENDER_ID", "Afrimillions")
-    TERMII_BASE_URL: str = "https://api.ng.termii.com/api/v1"
+    TERMII_BASE_URL: str = os.getenv("TERMII_BASE_URL", "")
 
     INACTIVITY_HOURS: int = int(os.getenv("INACTIVITY_HOURS", 48))
     COOLDOWN_HOURS: int = int(os.getenv("COOLDOWN_HOURS", 24))
