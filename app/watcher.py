@@ -4,8 +4,14 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+from app import state
 from app.config import settings
-from app.processor import notify_inactive_users
+from app.processor import begin_cycle
+
+
+def _schedule_cycle():
+    if not begin_cycle():
+        print("Cycle already running; skipping this file change.")
 
 
 class CSVChangeHandler(FileSystemEventHandler):
@@ -25,8 +31,12 @@ class CSVChangeHandler(FileSystemEventHandler):
 
         print(f"Detected change: {path.name}")
         time.sleep(2)  # wait for file write to finish
-        result = notify_inactive_users()
-        print(result)
+
+        if state.loop is None:
+            print("Event loop not set; skipping.")
+            return
+
+        state.loop.call_soon_threadsafe(_schedule_cycle)
 
 
 def start_watcher():
