@@ -216,7 +216,10 @@ async def _run_features(deadline: datetime, features: set[str] | None = None) ->
     """Run the given feature subset (default: all enabled) and aggregate results."""
     features = (features & settings.ENABLED_FEATURES) if features else enabled_features()
     if not features:
+        print("Cycle: no features enabled; nothing to run.")
         return {"message": "No features enabled.", "count": 0}
+
+    print(f"Cycle started at {datetime.now().strftime('%H:%M:%S')}, running features: {', '.join(sorted(features))}")
 
     logins_df = _load_csv(settings.LOGIN_FILE_PATTERN)
 
@@ -228,6 +231,7 @@ async def _run_features(deadline: datetime, features: set[str] | None = None) ->
         results[INACTIVE] = await notify_inactive_users(logins_df, deadline)
 
     total = sum(r.get("sent", 0) for r in results.values())
+    print(f"Cycle finished: total sent={total}. Per-feature: {results}")
     return {
         "message": f"Cycle complete: {total} message(s) sent.",
         "count": total,
@@ -286,20 +290,26 @@ def _merge_queued(kind: str, users: list[InactiveUser]) -> list[InactiveUser]:
 async def notify_welcome_users(logins_df: pd.DataFrame, deadline: datetime) -> dict:
     users = _merge_queued(WELCOME, find_recent_login_users(logins_df))
     if not users:
+        print("Welcome: no recent-login users to welcome.")
         return {"message": "No recent-login users to welcome.", "count": 0}
 
+    print(f"Welcome: {len(users)} user(s) to send to.")
     result = await _send_users(users, deadline, WELCOME, _build_welcome_message)
     result["count"] = result.get("sent", 0)
+    print(f"Welcome result: {result}")
     return result
 
 
 async def notify_inactive_users(logins_df: pd.DataFrame, deadline: datetime) -> dict:
     users = _merge_queued(INACTIVE, find_inactive_users(logins_df))
     if not users:
+        print("Inactive: no inactive users to notify.")
         return {"message": "No inactive users to notify.", "count": 0}
 
+    print(f"Inactive: {len(users)} user(s) to send to.")
     result = await _send_users(users, deadline, INACTIVE, _build_inactive_message)
     result["count"] = result.get("sent", 0)
+    print(f"Inactive result: {result}")
     return result
 
 
