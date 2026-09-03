@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, time
+from datetime import datetime
 import threading
 from contextlib import asynccontextmanager
 
@@ -10,7 +10,7 @@ from app import state
 from app.config import settings
 from app.database import init_db
 from app.messager import aclose_client, send_sms
-from app.processor import begin_cycle
+from app.processor import begin_cycle, WELCOME, INACTIVE
 from app.watcher import start_watcher
 
 
@@ -18,14 +18,26 @@ class SMSRequest(BaseModel):
     phone: str = Field(..., min_length=7, description="Recipient phone number")
     message: str = Field(..., min_length=1, max_length=160, description="SMS text")
 
-def check_if_within_time_range(start_time: time = time(14, 0), end_time: time = time(18, 0)) -> bool: 
+
+def _check_if_within_time_range() -> bool:
     now = datetime.now().time()
-    if now < start_time or now > end_time:
-        print(f"Notification cycle cannot begin outside {start_time} to {end_time}")
+    if now < settings.START_TIME or now > settings.END_TIME:
+        print(f"Notification cycle cannot begin outside {settings.START_TIME} to {settings.END_TIME}")
         return False
 
     print("Notifications can be sent")
     return True
+
+
+def _trigger(features: set[str] | None = None):
+    if not _check_if_within_time_range():
+        return {"message": "Notification cycle cannot begin outside the allowed time range."}, 409
+    if features is not None and not (features & settings.ENABLED_FEATURES):
+        return {"message": "Requested feature is not enabled."}, 409
+    started = begin_cycle(features)
+    if not started:
+        return {"message": "A notification cycle is already running."}, 409
+    return {"message": "Notification cycle started."}, 200
 
     
 @asynccontextmanager
@@ -37,7 +49,10 @@ async def lifespan(app: FastAPI):
     watcher_thread.start()
 
     print("Afrimillions listener started.")
+    print(f"  Enabled features: {', '.join(sorted(settings.ENABLED_FEATURES)) or 'none'}")
+    print(f"  Sending window: {settings.START_TIME} to {settings.END_TIME}")
     print(f"  Inactivity threshold: {settings.INACTIVITY_HOURS}h")
+    print(f"  Recent-login welcome window: {settings.LOGIN_WINDOW_HOURS}h")
     print(f"  Cooldown: {settings.COOLDOWN_HOURS}h")
     print(f"  Max messages: {'unlimited' if settings.MAX_MESSAGES == 0 else settings.MAX_MESSAGES}")
     print(f"  Max concurrent SMS: {settings.MAX_CONCURRENCY}")
@@ -71,12 +86,20 @@ async def send_custom_sms(req: SMSRequest):
 
 @app.post("/trigger")
 async def trigger():
-    if not check_if_within_time_range():
-        return {"message": "Notification cycle cannot begin outside the allowed time range."}
-    started = begin_cycle()
-    if not started:
-        return {"message": "A notification cycle is already running."}
-    return {"message": "Notification cycle started."}
+    message, status = _trigger()
+    return message, status
+
+
+@app.post("/trigger/welcome")
+async def trigger_welcome():
+    message, status = _trigger({WELCOME})
+    return message, status
+
+
+@app.post("/trigger/inactive")
+async def trigger_inactive():
+    message, status = _trigger({INACTIVE})
+    return message, status
 
 
 @app.get("/status")

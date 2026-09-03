@@ -1,4 +1,6 @@
+import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from watchdog.observers import Observer
@@ -6,12 +8,32 @@ from watchdog.events import FileSystemEventHandler
 
 from app import state
 from app.config import settings
-from app.processor import begin_cycle
+from app.database import has_pending
+from app.processor import begin_cycle, enabled_features
+
+AUTO_START_POLL_SECONDS = 60
+
+
+def _within_start_window() -> bool:
+    now = datetime.now().time()
+    return settings.START_TIME <= now <= settings.END_TIME
 
 
 def _schedule_cycle():
     if not begin_cycle():
-        print("Cycle already running; skipping this file change.")
+        print("Cycle already running; skipping.")
+
+
+def _auto_start_loop():
+    while True:
+        time.sleep(AUTO_START_POLL_SECONDS)
+        if state.loop is None:
+            continue
+        if not _within_start_window():
+            continue
+        if not any(has_pending(kind) for kind in enabled_features()):
+            continue
+        state.loop.call_soon_threadsafe(_schedule_cycle)
 
 
 class CSVChangeHandler(FileSystemEventHandler):
@@ -47,6 +69,9 @@ def start_watcher():
     observer.schedule(CSVChangeHandler(), str(path), recursive=False)
     observer.start()
     print(f"Watching {path.resolve()} for CSV changes...")
+
+    auto_start = threading.Thread(target=_auto_start_loop, daemon=True)
+    auto_start.start()
 
     try:
         while True:

@@ -6,13 +6,33 @@ import pandas as pd
 
 from app import state
 from app.config import settings
-from app.database import get_all_notified, reset_user, upsert_notified_records
+from app.database import (
+    add_pending,
+    clear_pending,
+    get_all_notified,
+    get_pending,
+    get_welcome_sent,
+    reset_user,
+    upsert_notified_records,
+    upsert_welcome_sent,
+)
 from app.messager import send_sms
 from app.models import InactiveUser
 
+WELCOME = "welcome"
+INACTIVE = "inactive"
 
-def _build_message(user: InactiveUser) -> str:
-    return f"Hi {user.first_name}, we miss you! Log in to AfriMillions to keep playing."
+
+def enabled_features() -> set[str]:
+    return settings.ENABLED_FEATURES & {WELCOME, INACTIVE}
+
+
+def _build_inactive_message(user: InactiveUser) -> str:
+    return settings.INACTIVE_MESSAGE.format(first_name=user.first_name)
+
+
+def _build_welcome_message(user: InactiveUser) -> str:
+    return settings.WELCOME_MESSAGE.format(first_name=user.first_name)
 
 
 def _normalize_phone(raw) -> str | None:
@@ -122,26 +142,112 @@ def find_inactive_users(logins_df: pd.DataFrame | None = None) -> list[InactiveU
     return results
 
 
-async def run_cycle_async(deadline: datetime) -> dict:
-    """Run a full notification cycle as an async task. Cancellable via task.cancel()."""
+def find_recent_login_users(logins_df: pd.DataFrame | None = None) -> list[InactiveUser]:
+    """Feature 1: users who logged in within the recent login window.
+
+    Returns users whose last login is within LOGIN_WINDOW_HOURS of now and who
+    have not already been welcomed for that same login event.
+    """
+    if logins_df is None:
+        logins_df = _load_csv(settings.LOGIN_FILE_PATTERN)
+    regs_df = _load_csv(settings.REGISTRATION_FILE_PATTERN)
+
+    if logins_df.empty or regs_df.empty:
+        print("No login or registration data available.")
+        return []
+
+    now_naive = datetime.now()
+    window_cutoff = now_naive - timedelta(hours=settings.LOGIN_WINDOW_HOURS)
+
+    last_logins = (
+        logins_df.groupby("userId")["timestamp"]
+        .max()
+        .reset_index()
+        .rename(columns={"timestamp": "last_login"})
+    )
+
+    recent = last_logins[last_logins["last_login"] >= window_cutoff].copy()
+
+    merged = recent.merge(
+        regs_df[["userId", "firstName", "phone"]],
+        on="userId",
+        how="left",
+    )
+
+    welcomed = get_welcome_sent()
+
+    results: list[InactiveUser] = []
+    for _, row in merged.iterrows():
+        user_id = str(row["userId"])
+        login_at = row["last_login"].isoformat()
+
+        if user_id in welcomed and welcomed[user_id] == login_at:
+            continue
+
+        phone = _normalize_phone(row.get("phone", ""))
+        if phone is None:
+            continue
+
+        results.append(
+            InactiveUser(
+                user_id=user_id,
+                first_name=str(row.get("firstName", "User")),
+                phone=phone,
+                last_login=login_at,
+                is_new=True,
+            )
+        )
+
+    return results
+
+
+async def run_cycle_async(deadline: datetime, features: set[str] | None = None) -> dict:
+    """Run a notification cycle as an async task. Cancellable via task.cancel()."""
     state.cancel_requested = False
 
     try:
-        return await notify_inactive_users(deadline)
+        return await _run_features(deadline, features)
     except asyncio.CancelledError:
         print("Notification cycle cancelled.")
         return {"message": "Notification cycle cancelled.", "count": 0, "cancelled": True}
 
 
-def begin_cycle() -> bool:
-    """Start a new cycle as an asyncio task. Returns False if one is already running."""
+async def _run_features(deadline: datetime, features: set[str] | None = None) -> dict:
+    """Run the given feature subset (default: all enabled) and aggregate results."""
+    features = (features & settings.ENABLED_FEATURES) if features else enabled_features()
+    if not features:
+        return {"message": "No features enabled.", "count": 0}
+
+    logins_df = _load_csv(settings.LOGIN_FILE_PATTERN)
+
+    results = {}
+    if WELCOME in features:
+        results[WELCOME] = await notify_welcome_users(logins_df, deadline)
+    if INACTIVE in features:
+        reset_active_users(logins_df)
+        results[INACTIVE] = await notify_inactive_users(logins_df, deadline)
+
+    total = sum(r.get("sent", 0) for r in results.values())
+    return {
+        "message": f"Cycle complete: {total} message(s) sent.",
+        "count": total,
+        "features": results,
+        "cancelled": False,
+    }
+
+
+def begin_cycle(features: set[str] | None = None) -> bool:
+    """Start a new cycle as an asyncio task. Returns False if one is already running.
+
+    If features is None, all enabled features run.
+    """
     if state.current_task is not None and not state.current_task.done():
         return False
 
     now = datetime.now()
     deadline = now.replace(hour=settings.CYCLE_END_HOUR, minute=0, second=0, microsecond=0)
 
-    task = asyncio.create_task(run_cycle_async(deadline))
+    task = asyncio.create_task(run_cycle_async(deadline, features))
     state.current_task = task
 
     def _on_done(t: asyncio.Task):
@@ -152,47 +258,126 @@ def begin_cycle() -> bool:
     return True
 
 
-async def notify_inactive_users(deadline: datetime) -> dict:
-    logins_df = _load_csv(settings.LOGIN_FILE_PATTERN)
-    reset_active_users(logins_df)
+def _merge_queued(kind: str, users: list[InactiveUser]) -> list[InactiveUser]:
+    """Merge queued users of a kind into the current user list, deduped by id."""
+    queued = get_pending(kind)
+    if not queued:
+        return users
 
-    users = find_inactive_users(logins_df)
+    clear_pending(kind)
+    print(f"Merging {len(queued)} queued {kind} user(s) from a previous deferred cycle.")
+
+    existing_ids = {u.user_id for u in users}
+    for q in queued:
+        if q["user_id"] in existing_ids:
+            continue
+        users.append(
+            InactiveUser(
+                user_id=q["user_id"],
+                first_name="User",
+                phone=q["phone"],
+                last_login=q.get("last_login_at", ""),
+                is_new=bool(q["is_new"]),
+            )
+        )
+    return users
+
+
+async def notify_welcome_users(logins_df: pd.DataFrame, deadline: datetime) -> dict:
+    users = _merge_queued(WELCOME, find_recent_login_users(logins_df))
+    if not users:
+        return {"message": "No recent-login users to welcome.", "count": 0}
+
+    result = await _send_users(users, deadline, WELCOME, _build_welcome_message)
+    result["count"] = result.get("sent", 0)
+    return result
+
+
+async def notify_inactive_users(logins_df: pd.DataFrame, deadline: datetime) -> dict:
+    users = _merge_queued(INACTIVE, find_inactive_users(logins_df))
     if not users:
         return {"message": "No inactive users to notify.", "count": 0}
 
+    result = await _send_users(users, deadline, INACTIVE, _build_inactive_message)
+    result["count"] = result.get("sent", 0)
+    return result
+
+
+async def _send_users(
+    users: list[InactiveUser],
+    deadline: datetime,
+    kind: str,
+    build_message,
+) -> dict:
+    """Send messages to users, respecting concurrency and the cycle deadline.
+
+    If the cycle is cancelled or the deadline passes, remaining unsent users
+    are persisted to the pending queue for a future cycle.
+    """
     sem = asyncio.Semaphore(settings.MAX_CONCURRENCY)
     completed: list[tuple[InactiveUser, dict | None]] = []
+    deferred: list[dict] = []
 
-    async def worker(user: InactiveUser) -> None:
+    def _defer(user: InactiveUser) -> dict:
+        return {
+            "user_id": user.user_id,
+            "phone": user.phone,
+            "is_new": user.is_new,
+            "last_login_at": user.last_login,
+        }
+
+    i = 0
+    while i < len(users):
         if state.cancel_requested or datetime.now() >= deadline:
-            return
-        async with sem:
+            deferred.extend(_defer(u) for u in users[i:])
+            break
+
+        batch = users[i : i + settings.MAX_CONCURRENCY]
+        i += len(batch)
+
+        async def worker(user: InactiveUser):
             if state.cancel_requested or datetime.now() >= deadline:
-                return
-            result = await send_sms(user.phone, _build_message(user))
-            completed.append((user, result))
+                return ("deferred", user)
+            async with sem:
+                if state.cancel_requested or datetime.now() >= deadline:
+                    return ("deferred", user)
+                return ("attempted", user, await send_sms(user.phone, build_message(user)))
 
-    tasks = [asyncio.create_task(worker(user)) for user in users]
-    try:
-        await asyncio.gather(*tasks)
-    except asyncio.CancelledError:
-        # Record whatever already succeeded before surfacing cancellation.
-        _persist_successes(completed)
-        raise
+        for outcome in await asyncio.gather(*[worker(u) for u in batch]):
+            if outcome[0] == "deferred":
+                _, user = outcome
+                deferred.append(_defer(user))
+            else:
+                _, user, result = outcome
+                completed.append((user, result))
 
-    _persist_successes(completed)
+    _persist_successes(completed, kind)
+    if deferred:
+        add_pending(deferred, kind)
 
     sent = sum(1 for _, result in completed if result)
     failed = sum(1 for _, result in completed if not result)
+    queued = len(deferred)
     return {
-        "message": f"Notified {sent} user(s).",
-        "count": sent,
+        "message": f"Notified {sent} {kind} user(s).",
+        "sent": sent,
         "failed": failed,
+        "queued": queued,
         "cancelled": False,
     }
 
 
-def _persist_successes(completed: list[tuple[InactiveUser, dict | None]]):
+def _persist_successes(completed: list[tuple[InactiveUser, dict | None]], kind: str):
+    if kind == WELCOME:
+        records = [
+            {"user_id": user.user_id, "last_login_at": user.last_login}
+            for user, result in completed
+            if result and user.last_login
+        ]
+        if records:
+            upsert_welcome_sent(records)
+        return
+
     records = [
         {
             "user_id": user.user_id,
