@@ -1,0 +1,11 @@
+.git/
+.gitignore
+.venv/
+__pycache__/
+*.pyc
+.env
+notified_users.db
+data/
+webview/
+scripts/
+*.md
