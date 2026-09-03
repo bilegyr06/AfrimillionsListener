@@ -1,8 +1,10 @@
 $projectDir = "C:\path\to\Afrimillions"
+$dockerCompose = "docker compose"
+
 Set-Location $projectDir
 
 Write-Host "Starting Afrimillions container..."
-docker-compose up -d
+& $dockerCompose up -d
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Container started successfully."
