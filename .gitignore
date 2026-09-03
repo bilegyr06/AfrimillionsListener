@@ -4,3 +4,4 @@ __pycache__/
 .env
 notified_users.db
 data/
+webview/
