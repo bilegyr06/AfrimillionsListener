@@ -122,12 +122,12 @@ def find_inactive_users(logins_df: pd.DataFrame | None = None) -> list[InactiveU
     return results
 
 
-async def run_cycle_async() -> dict:
+async def run_cycle_async(deadline: datetime) -> dict:
     """Run a full notification cycle as an async task. Cancellable via task.cancel()."""
     state.cancel_requested = False
 
     try:
-        return await notify_inactive_users()
+        return await notify_inactive_users(deadline)
     except asyncio.CancelledError:
         print("Notification cycle cancelled.")
         return {"message": "Notification cycle cancelled.", "count": 0, "cancelled": True}
@@ -138,7 +138,10 @@ def begin_cycle() -> bool:
     if state.current_task is not None and not state.current_task.done():
         return False
 
-    task = asyncio.create_task(run_cycle_async())
+    now = datetime.now()
+    deadline = now.replace(hour=settings.CYCLE_END_HOUR, minute=0, second=0, microsecond=0)
+
+    task = asyncio.create_task(run_cycle_async(deadline))
     state.current_task = task
 
     def _on_done(t: asyncio.Task):
@@ -149,7 +152,7 @@ def begin_cycle() -> bool:
     return True
 
 
-async def notify_inactive_users() -> dict:
+async def notify_inactive_users(deadline: datetime) -> dict:
     logins_df = _load_csv(settings.LOGIN_FILE_PATTERN)
     reset_active_users(logins_df)
 
@@ -161,10 +164,10 @@ async def notify_inactive_users() -> dict:
     completed: list[tuple[InactiveUser, dict | None]] = []
 
     async def worker(user: InactiveUser) -> None:
-        if state.cancel_requested:
+        if state.cancel_requested or datetime.now() >= deadline:
             return
         async with sem:
-            if state.cancel_requested:
+            if state.cancel_requested or datetime.now() >= deadline:
                 return
             result = await send_sms(user.phone, _build_message(user))
             completed.append((user, result))

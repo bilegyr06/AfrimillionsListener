@@ -16,6 +16,7 @@ class Settings:
     MAX_MESSAGES: int = int(os.getenv("MAX_MESSAGES", 0))  # 0 = unlimited
     MAX_CONCURRENCY: int = int(os.getenv("MAX_CONCURRENCY", 50))  # parallel SMS sends
     SMS_TIMEOUT: float = float(os.getenv("SMS_TIMEOUT", 30))
+    CYCLE_END_HOUR: int = int(os.getenv("CYCLE_END_HOUR", 20))  # cycle must not run past this hour
 
     DATA_FOLDER: Path = BASE_DIR / os.getenv("DATA_FOLDER", "data")
     DB_PATH: Path = BASE_DIR / os.getenv("DB_PATH", "app/notified_users.db")

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, time
 import threading
 from contextlib import asynccontextmanager
 
@@ -17,7 +18,16 @@ class SMSRequest(BaseModel):
     phone: str = Field(..., min_length=7, description="Recipient phone number")
     message: str = Field(..., min_length=1, max_length=160, description="SMS text")
 
+def check_if_within_time_range(start_time: time = time(14, 0), end_time: time = time(18, 0)) -> bool: 
+    now = datetime.now().time()
+    if now < start_time or now > end_time:
+        print(f"Notification cycle cannot begin outside {start_time} to {end_time}")
+        return False
 
+    print("Notifications can be sent")
+    return True
+
+    
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -61,6 +71,8 @@ async def send_custom_sms(req: SMSRequest):
 
 @app.post("/trigger")
 async def trigger():
+    if not check_if_within_time_range():
+        return {"message": "Notification cycle cannot begin outside the allowed time range."}
     started = begin_cycle()
     if not started:
         return {"message": "A notification cycle is already running."}
