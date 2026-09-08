@@ -1,4 +1,4 @@
-# Afrimillions Inactivity Listener
+# Afrimillions Listener
 
 A FastAPI service that watches the `data/` folder for CSV updates, finds users who haven't logged in for the last 48 hours, and sends them an SMS via [Termii](https://termii.com).
 
