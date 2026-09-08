@@ -5,3 +5,4 @@ __pycache__/
 notified_users.db
 data/
 webview/
+docs/

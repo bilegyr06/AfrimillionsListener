@@ -1,14 +1,24 @@
-$projectDir = "C:\path\to\Afrimillions"
-$dockerCompose = "docker compose"
+$ErrorActionPreference = "Stop"
+
+$projectDir = Split-Path -Parent $PSScriptRoot
+$docker = "C:\Program Files\Docker\Docker\resources\bin\docker.exe"
 
 Set-Location $projectDir
 
-Write-Host "Stopping Afrimillions container..."
-& $dockerCompose down
+if (-not (Test-Path $docker)) {
+    throw "Docker CLI was not found at '$docker'."
+}
 
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "Container stopped successfully."
-} else {
-    Write-Host "Failed to stop container." -ForegroundColor Red
+if (-not (Test-Path (Join-Path $projectDir "docker-compose.yml"))) {
+    throw "docker-compose.yml was not found in '$projectDir'."
+}
+
+Write-Host "Stopping Afrimillions..."
+& $docker compose down --remove-orphans
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Failed to stop Afrimillions." -ForegroundColor Red
     exit 1
 }
+
+Write-Host "Afrimillions stopped successfully."
