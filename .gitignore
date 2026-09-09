@@ -6,3 +6,5 @@ notified_users.db
 data/
 webview/
 docs/
+.pytest-tmp/
+.pytest_cache/

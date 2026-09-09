@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 from datetime import datetime
@@ -12,6 +13,7 @@ from app.database import has_pending
 from app.processor import begin_cycle, enabled_features
 
 AUTO_START_POLL_SECONDS = 60
+STATS_SYNC_POLL_SECONDS = 30 * 60  # 30 minutes
 
 
 def _within_start_window() -> bool:
@@ -34,6 +36,28 @@ def _auto_start_loop():
         if not any(has_pending(kind) for kind in enabled_features()):
             continue
         state.loop.call_soon_threadsafe(_schedule_cycle)
+
+
+def _stats_sync_loop():
+    while True:
+        time.sleep(STATS_SYNC_POLL_SECONDS)
+        if state.loop is None:
+            continue
+        state.loop.call_soon_threadsafe(_schedule_stats_sync)
+
+
+def _schedule_stats_sync():
+    from app.stats_updater import sync_delivery_statuses
+
+    async def _do_sync():
+        try:
+            result = await sync_delivery_statuses()
+            if result.get("updated", 0) > 0:
+                print(f"Stats sync: updated {result['updated']} delivery status(es).")
+        except Exception as e:
+            print(f"Stats sync failed: {e}")
+
+    asyncio.ensure_future(_do_sync())
 
 
 class CSVChangeHandler(FileSystemEventHandler):
@@ -72,6 +96,10 @@ def start_watcher():
 
     auto_start = threading.Thread(target=_auto_start_loop, daemon=True)
     auto_start.start()
+
+    stats_sync = threading.Thread(target=_stats_sync_loop, daemon=True)
+    stats_sync.start()
+    print(f"Stats delivery-status sync running every {STATS_SYNC_POLL_SECONDS // 60} minute(s).")
 
     try:
         while True:

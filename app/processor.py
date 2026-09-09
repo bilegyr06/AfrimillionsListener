@@ -1,5 +1,6 @@
 import asyncio
 import glob
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -12,12 +13,15 @@ from app.database import (
     get_all_notified,
     get_pending,
     get_welcome_sent,
+    log_sms_batch,
+    log_wallet_snapshot,
     reset_user,
     upsert_notified_records,
     upsert_welcome_sent,
 )
 from app.messager import send_sms
 from app.models import InactiveUser
+from app.termii_insights import get_balance
 
 WELCOME = "welcome"
 INACTIVE = "inactive"
@@ -219,22 +223,31 @@ async def _run_features(deadline: datetime, features: set[str] | None = None) ->
         print("Cycle: no features enabled; nothing to run.")
         return {"message": "No features enabled.", "count": 0}
 
-    print(f"Cycle started at {datetime.now().strftime('%H:%M:%S')}, running features: {', '.join(sorted(features))}")
+    cycle_id = uuid.uuid4().hex[:16]
+    print(f"Cycle {cycle_id} started at {datetime.now().strftime('%H:%M:%S')}, running features: {', '.join(sorted(features))}")
+
+    balance_info = await get_balance()
+    if balance_info:
+        log_wallet_snapshot(
+            balance=balance_info.get("balance", 0),
+            currency=balance_info.get("currency", "NGN"),
+        )
 
     logins_df = _load_csv(settings.LOGIN_FILE_PATTERN)
 
     results = {}
     if WELCOME in features:
-        results[WELCOME] = await notify_welcome_users(logins_df, deadline)
+        results[WELCOME] = await notify_welcome_users(logins_df, deadline, cycle_id)
     if INACTIVE in features:
         reset_active_users(logins_df)
-        results[INACTIVE] = await notify_inactive_users(logins_df, deadline)
+        results[INACTIVE] = await notify_inactive_users(logins_df, deadline, cycle_id)
 
     total = sum(r.get("sent", 0) for r in results.values())
-    print(f"Cycle finished: total sent={total}. Per-feature: {results}")
+    print(f"Cycle {cycle_id} finished: total sent={total}. Per-feature: {results}")
     return {
         "message": f"Cycle complete: {total} message(s) sent.",
         "count": total,
+        "cycle_id": cycle_id,
         "features": results,
         "cancelled": False,
     }
@@ -287,27 +300,27 @@ def _merge_queued(kind: str, users: list[InactiveUser]) -> list[InactiveUser]:
     return users
 
 
-async def notify_welcome_users(logins_df: pd.DataFrame, deadline: datetime) -> dict:
+async def notify_welcome_users(logins_df: pd.DataFrame, deadline: datetime, cycle_id: str) -> dict:
     users = _merge_queued(WELCOME, find_recent_login_users(logins_df))
     if not users:
         print("Welcome: no recent-login users to welcome.")
         return {"message": "No recent-login users to welcome.", "count": 0}
 
     print(f"Welcome: {len(users)} user(s) to send to.")
-    result = await _send_users(users, deadline, WELCOME, _build_welcome_message)
+    result = await _send_users(users, deadline, WELCOME, _build_welcome_message, cycle_id)
     result["count"] = result.get("sent", 0)
     print(f"Welcome result: {result}")
     return result
 
 
-async def notify_inactive_users(logins_df: pd.DataFrame, deadline: datetime) -> dict:
+async def notify_inactive_users(logins_df: pd.DataFrame, deadline: datetime, cycle_id: str) -> dict:
     users = _merge_queued(INACTIVE, find_inactive_users(logins_df))
     if not users:
         print("Inactive: no inactive users to notify.")
         return {"message": "No inactive users to notify.", "count": 0}
 
     print(f"Inactive: {len(users)} user(s) to send to.")
-    result = await _send_users(users, deadline, INACTIVE, _build_inactive_message)
+    result = await _send_users(users, deadline, INACTIVE, _build_inactive_message, cycle_id)
     result["count"] = result.get("sent", 0)
     print(f"Inactive result: {result}")
     return result
@@ -318,6 +331,7 @@ async def _send_users(
     deadline: datetime,
     kind: str,
     build_message,
+    cycle_id: str,
 ) -> dict:
     """Send messages to users, respecting concurrency and the cycle deadline.
 
@@ -327,6 +341,7 @@ async def _send_users(
     sem = asyncio.Semaphore(settings.MAX_CONCURRENCY)
     completed: list[tuple[InactiveUser, dict | None]] = []
     deferred: list[dict] = []
+    sms_log_records: list[dict] = []
 
     def _defer(user: InactiveUser) -> dict:
         return {
@@ -357,10 +372,42 @@ async def _send_users(
             if outcome[0] == "deferred":
                 _, user = outcome
                 deferred.append(_defer(user))
+                sms_log_records.append({
+                    "user_id": user.user_id,
+                    "kind": kind,
+                    "phone": user.phone,
+                    "status": "deferred",
+                    "cost": 0,
+                    "cycle_id": cycle_id,
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                })
             else:
                 _, user, result = outcome
                 completed.append((user, result))
+                if result:
+                    sms_log_records.append({
+                        "message_id": result.get("message_id"),
+                        "user_id": user.user_id,
+                        "kind": kind,
+                        "phone": user.phone,
+                        "status": "sent",
+                        "cost": 0,
+                        "balance_after": result.get("balance"),
+                        "cycle_id": cycle_id,
+                        "sent_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                else:
+                    sms_log_records.append({
+                        "user_id": user.user_id,
+                        "kind": kind,
+                        "phone": user.phone,
+                        "status": "failed",
+                        "cost": 0,
+                        "cycle_id": cycle_id,
+                        "sent_at": datetime.now(timezone.utc).isoformat(),
+                    })
 
+    log_sms_batch(sms_log_records)
     _persist_successes(completed, kind)
     if deferred:
         add_pending(deferred, kind)

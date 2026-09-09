@@ -3,14 +3,22 @@ from datetime import datetime
 import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from pydantic import BaseModel, Field
 
 from app import state
 from app.config import settings
-from app.database import init_db
+from app.database import (
+    get_cycle_stats,
+    get_sms_logs,
+    get_stats_summary,
+    get_wallet_history,
+    init_db,
+)
 from app.messager import aclose_client, send_sms
 from app.processor import begin_cycle, WELCOME, INACTIVE
+from app.stats_updater import sync_delivery_statuses
+from app.termii_insights import get_balance
 from app.watcher import start_watcher
 
 
@@ -115,3 +123,58 @@ async def cancel():
         state.current_task.cancel()
         return {"message": "Cancellation requested."}
     return {"message": "No cycle running."}
+
+
+# ---------------------------------------------------------------------------
+# Stats endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/stats")
+def stats(
+    since: str | None = Query(None, description="Start date YYYY-MM-DD"),
+    until: str | None = Query(None, description="End date YYYY-MM-DD"),
+):
+    return get_stats_summary(since=since, until=until)
+
+
+@app.get("/stats/welcome")
+def stats_welcome(
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+):
+    return get_stats_summary(kind="welcome", since=since, until=until)
+
+
+@app.get("/stats/inactive")
+def stats_inactive(
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+):
+    return get_stats_summary(kind="inactive", since=since, until=until)
+
+
+@app.get("/stats/cycles")
+def stats_cycles(
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+):
+    return get_cycle_stats(since=since, until=until)
+
+
+@app.get("/stats/wallet")
+def stats_wallet():
+    return get_wallet_history()
+
+
+@app.get("/stats/balance")
+async def stats_balance():
+    info = await get_balance()
+    if info is None:
+        return {"message": "Failed to retrieve balance from Termii."}
+    return info
+
+
+@app.post("/stats/sync")
+async def stats_sync():
+    result = await sync_delivery_statuses()
+    return result

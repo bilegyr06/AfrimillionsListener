@@ -47,6 +47,32 @@ def init_db():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sms_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id TEXT,
+            user_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'sent',
+            cost REAL DEFAULT 0,
+            balance_after REAL,
+            cycle_id TEXT,
+            sent_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS wallet_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            balance REAL NOT NULL,
+            currency TEXT NOT NULL,
+            fetched_at TEXT NOT NULL
+        )
+        """
+    )
     _ensure_column(conn, "pending_queue", "kind", "TEXT NOT NULL DEFAULT 'inactive'")
     _ensure_column(conn, "pending_queue", "last_login_at", "TEXT NOT NULL DEFAULT ''")
     conn.commit()
@@ -232,3 +258,245 @@ def upsert_welcome_sent(records: list[dict]):
     )
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# SMS log
+# ---------------------------------------------------------------------------
+
+def log_sms(record: dict):
+    """Insert a single SMS log record.
+
+    record keys: message_id (optional), user_id, kind, phone, status,
+                 cost, balance_after, cycle_id, sent_at.
+    """
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT INTO sms_log
+            (message_id, user_id, kind, phone, status, cost, balance_after, cycle_id, sent_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record.get("message_id"),
+            record["user_id"],
+            record["kind"],
+            record["phone"],
+            record.get("status", "sent"),
+            record.get("cost", 0),
+            record.get("balance_after"),
+            record.get("cycle_id"),
+            record["sent_at"],
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def log_sms_batch(records: list[dict]):
+    """Bulk-insert SMS log records."""
+    if not records:
+        return
+    conn = get_connection()
+    conn.executemany(
+        """
+        INSERT INTO sms_log
+            (message_id, user_id, kind, phone, status, cost, balance_after, cycle_id, sent_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                r.get("message_id"),
+                r["user_id"],
+                r["kind"],
+                r["phone"],
+                r.get("status", "sent"),
+                r.get("cost", 0),
+                r.get("balance_after"),
+                r.get("cycle_id"),
+                r["sent_at"],
+            )
+            for r in records
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_sms_status(message_id: str, status: str, cost: float | None = None):
+    """Update the delivery status (and optionally cost) for a sent SMS."""
+    conn = get_connection()
+    if cost is not None:
+        conn.execute(
+            "UPDATE sms_log SET status = ?, cost = ? WHERE message_id = ?",
+            (status, cost, message_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE sms_log SET status = ? WHERE message_id = ?",
+            (status, message_id),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_unsynced_sms(limit: int = 100) -> list[dict]:
+    """Return sent SMS records that have a message_id but haven't reached a
+    terminal delivery status yet."""
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT id, message_id, status FROM sms_log
+        WHERE message_id IS NOT NULL
+          AND status NOT IN ('delivered', 'dnd', 'rejected', 'expired', 'failed')
+        ORDER BY id
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_sms_logs(
+    kind: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> list[dict]:
+    """Query SMS logs with optional kind and date-range filters."""
+    clauses: list[str] = []
+    params: list = []
+    if kind:
+        clauses.append("kind = ?")
+        params.append(kind)
+    if since:
+        clauses.append("sent_at >= ?")
+        params.append(since)
+    if until:
+        clauses.append("sent_at <= ?")
+        params.append(until)
+
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    conn = get_connection()
+    rows = conn.execute(
+        f"SELECT * FROM sms_log{where} ORDER BY id", params
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_stats_summary(
+    kind: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> dict:
+    """Return aggregated statistics for the sms_log table."""
+    clauses: list[str] = []
+    params: list = []
+    if kind:
+        clauses.append("kind = ?")
+        params.append(kind)
+    if since:
+        clauses.append("sent_at >= ?")
+        params.append(since)
+    if until:
+        clauses.append("sent_at <= ?")
+        params.append(until)
+
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    conn = get_connection()
+
+    row = conn.execute(
+        f"""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN status IN ('sent', 'delivered') THEN 1 ELSE 0 END) AS sent,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered,
+            SUM(CASE WHEN status = 'dnd' THEN 1 ELSE 0 END) AS dnd,
+            SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) AS rejected,
+            SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) AS expired,
+            SUM(CASE WHEN status = 'deferred' THEN 1 ELSE 0 END) AS deferred,
+            COALESCE(SUM(cost), 0) AS total_cost,
+            COALESCE(AVG(CASE WHEN cost > 0 THEN cost END), 0) AS avg_cost
+        FROM sms_log{where}
+        """,
+        params,
+    ).fetchone()
+
+    conn.close()
+    return dict(row) if row else {}
+
+
+def get_cycle_stats(
+    since: str | None = None,
+    until: str | None = None,
+) -> list[dict]:
+    """Return per-cycle aggregated statistics."""
+    clauses: list[str] = ["cycle_id IS NOT NULL"]
+    params: list = []
+    if since:
+        clauses.append("sent_at >= ?")
+        params.append(since)
+    if until:
+        clauses.append("sent_at <= ?")
+        params.append(until)
+
+    where = " WHERE " + " AND ".join(clauses)
+    conn = get_connection()
+    rows = conn.execute(
+        f"""
+        SELECT
+            cycle_id,
+            COUNT(*) AS total,
+            SUM(CASE WHEN status IN ('sent', 'delivered') THEN 1 ELSE 0 END) AS sent,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered,
+            SUM(CASE WHEN status = 'deferred' THEN 1 ELSE 0 END) AS deferred,
+            COALESCE(SUM(cost), 0) AS total_cost,
+            MIN(sent_at) AS started_at,
+            MAX(sent_at) AS ended_at
+        FROM sms_log{where}
+        GROUP BY cycle_id
+        ORDER BY MIN(sent_at) DESC
+        """,
+        params,
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Wallet log
+# ---------------------------------------------------------------------------
+
+def log_wallet_snapshot(balance: float, currency: str):
+    """Record a wallet balance snapshot."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO wallet_log (balance, currency, fetched_at) VALUES (?, ?, ?)",
+        (balance, currency, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_wallet_history() -> list[dict]:
+    """Return all wallet balance snapshots, newest first."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM wallet_log ORDER BY id DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_latest_wallet() -> dict | None:
+    """Return the most recent wallet snapshot, or None."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM wallet_log ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
