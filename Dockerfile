@@ -2,6 +2,7 @@ FROM python:3.13-slim
 
 # System deps for Playwright Chromium
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    tzdata \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \

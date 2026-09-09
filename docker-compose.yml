@@ -11,3 +11,4 @@ services:
       - ./data:/app/data
     environment:
       - DATA_FOLDER=/app/data
+      - TZ=Africa/Lagos
