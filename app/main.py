@@ -13,6 +13,7 @@ from app.database import (
     get_sms_logs,
     get_stats_summary,
     get_wallet_history,
+    get_welcome_analytics,
     init_db,
 )
 from app.messager import aclose_client, send_sms
@@ -64,6 +65,8 @@ async def lifespan(app: FastAPI):
     print(f"  Welcome max messages: {'unlimited' if settings.WELCOME_MAX_MESSAGES == 0 else settings.WELCOME_MAX_MESSAGES} "
           f"(post-limit suppress: {'on' if settings.WELCOME_POST_LIMIT_SUPPRESS else 'off'})")
     print(f"  Cooldown: {settings.COOLDOWN_HOURS}h")
+    print(f"  Welcome post-send tracking window: {settings.WELCOME_POST_TRACK_HOURS}h"
+          f"{' (disabled)' if settings.WELCOME_POST_TRACK_HOURS <= 0 else ''}")
     print(f"  Max messages: {'unlimited' if settings.MAX_MESSAGES == 0 else settings.MAX_MESSAGES}")
     print(f"  Max concurrent SMS: {settings.MAX_CONCURRENCY}")
 
@@ -145,6 +148,13 @@ def stats_welcome(
     until: str | None = Query(None),
 ):
     return get_stats_summary(kind="welcome", since=since, until=until)
+
+
+@app.get("/stats/welcome/tracking")
+def stats_welcome_tracking(limit: int = Query(50, ge=1, le=1000)):
+    """Post-send analytics: whether welcomed users went on to play within their
+    tracking window. Review only; does not affect sending."""
+    return get_welcome_analytics(limit)
 
 
 @app.get("/stats/inactive")

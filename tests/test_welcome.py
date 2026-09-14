@@ -13,8 +13,13 @@ os.environ.setdefault("TERMII_BASE_URL", "https://test.api.termii.com/api")
 os.environ.setdefault("TERMII_SENDER_ID", "TestSender")
 
 from app.config import settings
-from app.database import get_welcome_sms_state, log_sms_batch, upsert_welcome_sent
-from app.processor import find_recent_login_users
+from app.database import (
+    get_welcome_analytics,
+    get_welcome_sms_state,
+    log_sms_batch,
+    upsert_welcome_sent,
+)
+from app.processor import find_recent_login_users, refresh_welcome_tracking
 
 
 def _ago(hours: float) -> pd.Timestamp:
@@ -160,3 +165,53 @@ class TestWelcomeState:
         assert state["1"]["count"] == 2
         assert state["1"]["last_sent_at"] == now
         assert "2" not in state
+
+
+def _seed_welcome_send(user_id: str, hours_ago: float):
+    log_sms_batch([
+        {"message_id": f"trk_{user_id}_{hours_ago}", "user_id": user_id, "kind": "welcome",
+         "phone": "2348012345678", "status": "sent",
+         "sent_at": (datetime.now() - timedelta(hours=hours_ago)).isoformat()},
+    ])
+
+
+def _plays(*events):
+    return pd.DataFrame(events, columns=["userId", "timestamp"])
+
+
+class TestWelcomePostSendTracking:
+    def test_disabled_when_window_zero(self, welcome_settings, monkeypatch):
+        monkeypatch.setattr(settings, "WELCOME_POST_TRACK_HOURS", 0)
+        assert refresh_welcome_tracking(_plays()) == {"disabled": True}
+
+    def test_sends_ingested_from_log(self, welcome_settings, monkeypatch):
+        monkeypatch.setattr(settings, "WELCOME_POST_TRACK_HOURS", 24)
+        _seed_welcome_send("1", 10)
+        refresh_welcome_tracking(_plays(("9", _ago(1))))
+        assert get_welcome_analytics()["summary"]["tracked"] == 1
+
+    def test_play_inside_window_marks_responded(self, welcome_settings, monkeypatch):
+        monkeypatch.setattr(settings, "WELCOME_POST_TRACK_HOURS", 24)
+        _seed_welcome_send("1", 10)
+        # play 8h ago = 2h after the send, well inside the 24h window
+        refresh_welcome_tracking(_plays(("1", _ago(8))))
+        summary = get_welcome_analytics()["summary"]
+        assert summary["responded"] == 1
+        assert summary["no_response"] == 0
+
+    def test_play_before_send_not_counted(self, welcome_settings, monkeypatch):
+        monkeypatch.setattr(settings, "WELCOME_POST_TRACK_HOURS", 24)
+        _seed_welcome_send("1", 10)
+        # play 12h ago = 2h before the send -> outside (sent, sent+window]
+        refresh_welcome_tracking(_plays(("1", _ago(12))))
+        summary = get_welcome_analytics()["summary"]
+        assert summary["responded"] == 0
+        assert summary["pending"] == 1
+
+    def test_window_closed_without_play_counts_no_response(self, welcome_settings, monkeypatch):
+        monkeypatch.setattr(settings, "WELCOME_POST_TRACK_HOURS", 24)
+        _seed_welcome_send("1", 30)
+        refresh_welcome_tracking(_plays(("9", _ago(1))))
+        summary = get_welcome_analytics()["summary"]
+        assert summary["no_response"] == 1
+        assert summary["pending"] == 0

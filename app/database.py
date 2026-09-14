@@ -49,6 +49,20 @@ def init_db():
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS welcome_analytics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sms_log_id INTEGER NOT NULL UNIQUE,
+            user_id TEXT NOT NULL,
+            sent_at TEXT NOT NULL,
+            cycle_id TEXT,
+            window_hours REAL NOT NULL,
+            first_play_at TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS sms_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             message_id TEXT,
@@ -279,6 +293,107 @@ def get_welcome_sms_state() -> dict[str, dict]:
     ).fetchall()
     conn.close()
     return {str(row["user_id"]): dict(row) for row in rows}
+
+
+# ---------------------------------------------------------------------------
+# Welcome post-send analytics (review only; does not affect sending)
+# ---------------------------------------------------------------------------
+
+def ingest_welcome_analytics(window_hours: float):
+    """Copy welcome sends from sms_log into welcome_analytics (once each).
+
+    Each successful welcome handoff gets one analytics row; re-runs are no-ops
+    thanks to the unique sms_log_id constraint.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO welcome_analytics
+            (sms_log_id, user_id, sent_at, cycle_id, window_hours, updated_at)
+        SELECT id, user_id, sent_at, cycle_id, ?, ?
+        FROM sms_log
+        WHERE kind = 'welcome' AND status IN ('sent', 'delivered')
+        """,
+        (window_hours, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_open_welcome_tracking() -> list[dict]:
+    """Welcome analytics rows that have not yet recorded a post-send play."""
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT sms_log_id, user_id, sent_at, window_hours
+        FROM welcome_analytics
+        WHERE first_play_at IS NULL
+        ORDER BY id
+        """
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def update_welcome_play(sms_log_id: int, first_play_at: str):
+    """Record the earliest confirmed play within the post-send window."""
+    conn = get_connection()
+    conn.execute(
+        """
+        UPDATE welcome_analytics SET first_play_at = ?, updated_at = ?
+        WHERE sms_log_id = ?
+        """,
+        (first_play_at, datetime.now(timezone.utc).isoformat(), sms_log_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_welcome_analytics(limit: int = 50) -> dict:
+    """Summarize post-send tracking and return the most recent rows.
+
+    pending = sends still inside their tracking window with no recorded play;
+    no_response = sends whose window has closed with no recorded play;
+    responded = sends with a recorded play inside the window.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT sms_log_id, user_id, sent_at, cycle_id, window_hours, first_play_at, updated_at
+        FROM welcome_analytics
+        ORDER BY id
+        """
+    ).fetchall()
+    conn.close()
+
+    now = datetime.now(timezone.utc)
+    responded = 0
+    pending = 0
+    no_response = 0
+    for row in rows:
+        if row["first_play_at"]:
+            responded += 1
+            continue
+        sent = datetime.fromisoformat(row["sent_at"])
+        if sent.tzinfo is None:
+            sent = sent.replace(tzinfo=timezone.utc)
+        if sent + timedelta(hours=row["window_hours"]) > now:
+            pending += 1
+        else:
+            no_response += 1
+
+    resolved = responded + no_response
+    return {
+        "summary": {
+            "tracked": len(rows),
+            "responded": responded,
+            "pending": pending,
+            "no_response": no_response,
+            "response_rate": round(responded / resolved, 4) if resolved else None,
+        },
+        "recent": [dict(row) for row in reversed(rows[-limit:])],
+    }
 
 
 # ---------------------------------------------------------------------------

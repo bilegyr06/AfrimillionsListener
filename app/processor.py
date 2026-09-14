@@ -12,12 +12,15 @@ from app.database import (
     add_pending,
     clear_pending,
     get_all_notified,
+    get_open_welcome_tracking,
     get_pending,
     get_welcome_sent,
     get_welcome_sms_state,
+    ingest_welcome_analytics,
     log_sms_batch,
     log_wallet_snapshot,
     reset_user,
+    update_welcome_play,
     upsert_notified_records,
     upsert_welcome_sent,
 )
@@ -255,6 +258,55 @@ def find_recent_login_users(
     return results
 
 
+def refresh_welcome_tracking(sales_df: pd.DataFrame) -> dict:
+    """Analytics only: link welcomed users to any play in their post-send window.
+
+    Runs each welcome cycle. New sends are captured once from sms_log, then
+    open sends are matched against the latest Sales file within
+    (sent_at, sent_at + WELCOME_POST_TRACK_HOURS]. Nothing tracked here
+    changes sending behaviour.
+    """
+    window_hours = settings.WELCOME_POST_TRACK_HOURS
+    if window_hours <= 0:
+        return {"disabled": True}
+
+    ingest_welcome_analytics(window_hours)
+
+    if sales_df.empty:
+        return {"tracked": 0, "responded": 0, "open": 0}
+
+    plays = sales_df.copy()
+    plays["userId"] = plays["userId"].astype(str)
+    plays["timestamp"] = pd.to_datetime(plays["timestamp"]).dt.tz_localize("UTC")
+    now_utc = datetime.now(timezone.utc)
+
+    open_rows = get_open_welcome_tracking()
+    responded = 0
+    for row in open_rows:
+        sent = datetime.fromisoformat(row["sent_at"])
+        if sent.tzinfo is None:
+            sent = sent.replace(tzinfo=timezone.utc)
+        window_end = sent + timedelta(hours=row["window_hours"])
+
+        user_plays = plays[plays["userId"] == row["user_id"]]
+        if user_plays.empty:
+            continue
+        matched = user_plays[
+            (user_plays["timestamp"] > sent)
+            & (user_plays["timestamp"] <= window_end)
+        ]
+        if matched.empty:
+            continue
+        update_welcome_play(row["sms_log_id"], matched["timestamp"].min().isoformat())
+        responded += 1
+
+    return {
+        "tracked": len(open_rows),
+        "responded": responded,
+        "open": len(open_rows) - responded,
+    }
+
+
 async def run_cycle_async(deadline: datetime, features: set[str] | None = None) -> dict:
     """Run a notification cycle as an async task. Cancellable via task.cancel()."""
     state.cancel_requested = False
@@ -351,15 +403,20 @@ def _merge_queued(kind: str, users: list[InactiveUser]) -> list[InactiveUser]:
 
 
 async def notify_welcome_users(logins_df: pd.DataFrame, deadline: datetime, cycle_id: str) -> dict:
-    users = _merge_queued(WELCOME, find_recent_login_users(logins_df))
+    sales_df = _load_csv(settings.SALES_FILE_PATTERN)
+    users = _merge_queued(WELCOME, find_recent_login_users(logins_df, sales_df))
     if not users:
         print("Welcome: no recent-login users to welcome.")
-        return {"message": "No recent-login users to welcome.", "count": 0}
+        result = {"message": "No recent-login users to welcome.", "count": 0}
+    else:
+        print(f"Welcome: {len(users)} user(s) to send to.")
+        result = await _send_users(users, deadline, WELCOME, _build_welcome_message, cycle_id)
+        result["count"] = result.get("sent", 0)
+        print(f"Welcome result: {result}")
 
-    print(f"Welcome: {len(users)} user(s) to send to.")
-    result = await _send_users(users, deadline, WELCOME, _build_welcome_message, cycle_id)
-    result["count"] = result.get("sent", 0)
-    print(f"Welcome result: {result}")
+    tracking = refresh_welcome_tracking(sales_df)
+    if not tracking.get("disabled"):
+        print(f"Welcome tracking: {tracking}")
     return result
 
 
