@@ -49,6 +49,8 @@ def _normalize_phone(raw) -> str | None:
 
     if digits.startswith("0") and len(digits) == 11:
         return "234" + digits[1:]
+    if len(digits) == 10:
+        return "234" + digits
     if digits.startswith("234") and len(digits) == 13:
         return digits
     if digits.startswith("233") and len(digits) == 12:
