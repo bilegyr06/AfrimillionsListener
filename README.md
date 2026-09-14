@@ -20,6 +20,7 @@ MAX_MESSAGES=0           # 0 = unlimited
 MAX_CONCURRENCY=50       # parallel SMS sends per cycle
 DATA_FOLDER=data
 DB_PATH=app/notified_users.db
+CSV_DOWNLOADER_ENABLED=false   # set true to auto-download CSVs from ALOT BI
 ```
 
 ## Run

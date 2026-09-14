@@ -32,6 +32,10 @@ log = logging.getLogger("csv_downloader")
 ALOTBI_URL = os.getenv("ALOTBI_URL", "").rstrip("/")
 ALOTBI_USERNAME = os.getenv("ALOTBI_USERNAME", "")
 ALOTBI_PASSWORD = os.getenv("ALOTBI_PASSWORD", "")
+CSV_DOWNLOADER_ENABLED = (
+    os.getenv("CSV_DOWNLOADER_ENABLED", "true").strip().lower()
+    in ("1", "true", "yes", "on")
+)
 DATA_FOLDER = BASE_DIR / os.getenv("DATA_FOLDER", "data")
 START_TIME_STR = os.getenv("START_TIME", "12:00")
 END_TIME_STR = os.getenv("END_TIME", "13:00")
@@ -177,6 +181,14 @@ async def run_download_cycle():
 
 
 async def main():
+    if not CSV_DOWNLOADER_ENABLED:
+        log.info(
+            "CSV_DOWNLOADER_ENABLED=false - auto-scraping disabled. "
+            "Add CSV files to %s manually.",
+            DATA_FOLDER,
+        )
+        return
+
     log.info(
         "CSV Downloader started – every %d min, window %s–%s",
         INTERVAL_MINUTES,
