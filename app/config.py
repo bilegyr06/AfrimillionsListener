@@ -36,8 +36,14 @@ class Settings:
         f.strip().lower() for f in os.getenv("ENABLED_FEATURES", "welcome,inactive").split(",") if f.strip()
     }
 
-    # Feature 1: welcome-back SMS shortly after login.
-    LOGIN_WINDOW_HOURS: float = float(os.getenv("LOGIN_WINDOW_HOURS", 4))
+    # Feature 1: welcome-back SMS for sign-ins that led to no game activity.
+    LOGIN_WINDOW_HOURS: float = float(os.getenv("LOGIN_WINDOW_HOURS", 4))  # legacy, unused by welcome flow
+    WELCOME_EVAL_DELAY_HOURS: float = float(os.getenv("WELCOME_EVAL_DELAY_HOURS", 1))
+    WELCOME_MAX_MESSAGES: int = int(os.getenv("WELCOME_MAX_MESSAGES", 3))  # 0 = unlimited
+    WELCOME_POST_LIMIT_SUPPRESS: bool = (
+        os.getenv("WELCOME_POST_LIMIT_SUPPRESS", "true").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
     WELCOME_MESSAGE: str = os.getenv(
         "WELCOME_MESSAGE", "Hi {first_name}, great to see you back! We missed you at AfriMillions."
     )
@@ -52,6 +58,7 @@ class Settings:
 
     LOGIN_FILE_PATTERN: str = "Login_*.csv"
     REGISTRATION_FILE_PATTERN: str = "Registrations_*.csv"
+    SALES_FILE_PATTERN: str = "Sales_*.csv"
 
 
 settings = Settings()

@@ -60,7 +60,9 @@ async def lifespan(app: FastAPI):
     print(f"  Enabled features: {', '.join(sorted(settings.ENABLED_FEATURES)) or 'none'}")
     print(f"  Sending window: {settings.START_TIME} to {settings.END_TIME}")
     print(f"  Inactivity threshold: {settings.INACTIVITY_HOURS}h")
-    print(f"  Recent-login welcome window: {settings.LOGIN_WINDOW_HOURS}h")
+    print(f"  Welcome evaluation delay: {settings.WELCOME_EVAL_DELAY_HOURS}h")
+    print(f"  Welcome max messages: {'unlimited' if settings.WELCOME_MAX_MESSAGES == 0 else settings.WELCOME_MAX_MESSAGES} "
+          f"(post-limit suppress: {'on' if settings.WELCOME_POST_LIMIT_SUPPRESS else 'off'})")
     print(f"  Cooldown: {settings.COOLDOWN_HOURS}h")
     print(f"  Max messages: {'unlimited' if settings.MAX_MESSAGES == 0 else settings.MAX_MESSAGES}")
     print(f"  Max concurrent SMS: {settings.MAX_CONCURRENCY}")

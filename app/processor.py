@@ -2,6 +2,7 @@ import asyncio
 import glob
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pandas as pd
 
@@ -13,6 +14,7 @@ from app.database import (
     get_all_notified,
     get_pending,
     get_welcome_sent,
+    get_welcome_sms_state,
     log_sms_batch,
     log_wallet_snapshot,
     reset_user,
@@ -63,7 +65,8 @@ def _load_csv(pattern: str) -> pd.DataFrame:
     if not files:
         print(f"No files found for pattern: {pattern}")
         return pd.DataFrame()
-    return pd.read_csv(files[0], parse_dates=["timestamp"])
+    newest = sorted(files, key=lambda p: Path(p).stat().st_mtime, reverse=True)[0]
+    return pd.read_csv(newest, parse_dates=["timestamp"])
 
 
 def reset_active_users(logins_df: pd.DataFrame):
@@ -148,22 +151,37 @@ def find_inactive_users(logins_df: pd.DataFrame | None = None) -> list[InactiveU
     return results
 
 
-def find_recent_login_users(logins_df: pd.DataFrame | None = None) -> list[InactiveUser]:
-    """Feature 1: users who logged in within the recent login window.
+def find_recent_login_users(
+    logins_df: pd.DataFrame | None = None,
+    sales_df: pd.DataFrame | None = None,
+) -> list[InactiveUser]:
+    """Feature 1: post-sign-in welcome campaign.
 
-    Returns users whose last login is within LOGIN_WINDOW_HOURS of now and who
-    have not already been welcomed for that same login event.
+    A sign-in becomes eligible once WELCOME_EVAL_DELAY_HOURS have elapsed, but
+    only if the user played no game during the wait period. Each sign-in can
+    trigger at most one Welcome SMS (see welcome_sent), subject to the per-user
+    cooldown and the configured Welcome notification cap / post-limit rule.
     """
     if logins_df is None:
         logins_df = _load_csv(settings.LOGIN_FILE_PATTERN)
     regs_df = _load_csv(settings.REGISTRATION_FILE_PATTERN)
+    if sales_df is None:
+        sales_df = _load_csv(settings.SALES_FILE_PATTERN)
 
-    if logins_df.empty or regs_df.empty:
-        print("No login or registration data available.")
+    if logins_df.empty or regs_df.empty or sales_df.empty:
+        print("No login, registration, or sales data available.")
         return []
 
+    # Join on a common string key so int/str user ids from different sources merge cleanly.
+    logins_df = logins_df.copy()
+    logins_df["userId"] = logins_df["userId"].astype(str)
+    regs_df = regs_df.copy()
+    regs_df["userId"] = regs_df["userId"].astype(str)
+    sales_df = sales_df.copy()
+    sales_df["userId"] = sales_df["userId"].astype(str)
+
     now_naive = datetime.now()
-    window_cutoff = now_naive - timedelta(hours=settings.LOGIN_WINDOW_HOURS)
+    delay = timedelta(hours=settings.WELCOME_EVAL_DELAY_HOURS)
 
     last_logins = (
         logins_df.groupby("userId")["timestamp"]
@@ -172,23 +190,53 @@ def find_recent_login_users(logins_df: pd.DataFrame | None = None) -> list[Inact
         .rename(columns={"timestamp": "last_login"})
     )
 
-    recent = last_logins[last_logins["last_login"] >= window_cutoff].copy()
+    # Only sign-ins whose evaluation delay has elapsed are considered.
+    evaluable = last_logins[last_logins["last_login"] <= now_naive - delay].copy()
 
-    merged = recent.merge(
+    merged = evaluable.merge(
         regs_df[["userId", "firstName", "phone"]],
         on="userId",
         how="left",
     )
 
+    # Users who played during the wait window (login, login + delay] are
+    # disqualified for that sign-in regardless of anything else.
+    plays = sales_df.rename(columns={"timestamp": "play_at"})
+    joined = merged.merge(plays, on="userId", how="inner", suffixes=("", "_play"))
+    played_in_window = joined[
+        (joined["play_at"] > joined["last_login"])
+        & (joined["play_at"] <= joined["last_login"] + delay)
+    ]
+    played_user_ids = set(played_in_window["userId"].astype(str))
+
     welcomed = get_welcome_sent()
+    welcome_state = get_welcome_sms_state()
+    now_utc = datetime.now(timezone.utc)
 
     results: list[InactiveUser] = []
     for _, row in merged.iterrows():
         user_id = str(row["userId"])
         login_at = row["last_login"].isoformat()
 
+        if user_id in played_user_ids:
+            continue
+
         if user_id in welcomed and welcomed[user_id] == login_at:
             continue
+
+        record = welcome_state.get(user_id)
+        if record:
+            next_available = datetime.fromisoformat(
+                record["last_sent_at"]
+            ) + timedelta(hours=settings.COOLDOWN_HOURS)
+            if now_utc < next_available:
+                continue
+            if (
+                settings.WELCOME_MAX_MESSAGES > 0
+                and record["count"] >= settings.WELCOME_MAX_MESSAGES
+                and settings.WELCOME_POST_LIMIT_SUPPRESS
+            ):
+                continue
 
         phone = _normalize_phone(row.get("phone", ""))
         if phone is None:

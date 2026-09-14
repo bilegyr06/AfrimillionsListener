@@ -260,6 +260,27 @@ def upsert_welcome_sent(records: list[dict]):
     conn.close()
 
 
+def get_welcome_sms_state() -> dict[str, dict]:
+    """Welcome campaign state per user, derived from the SMS send log.
+
+    Returns {user_id: {"count": n, "last_sent_at": iso}} for welcome messages
+    that were actually handed off (status 'sent' or 'delivered'). Cooldown and
+    the notification cap are computed from this rather than stored, so the
+    source of truth is the actual send history.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT user_id, COUNT(*) AS count, MAX(sent_at) AS last_sent_at
+        FROM sms_log
+        WHERE kind = 'welcome' AND status IN ('sent', 'delivered')
+        GROUP BY user_id
+        """
+    ).fetchall()
+    conn.close()
+    return {str(row["user_id"]): dict(row) for row in rows}
+
+
 # ---------------------------------------------------------------------------
 # SMS log
 # ---------------------------------------------------------------------------
