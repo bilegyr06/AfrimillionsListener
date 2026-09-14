@@ -37,7 +37,7 @@ class Settings:
     }
 
     # Feature 1: welcome-back SMS shortly after login.
-    LOGIN_WINDOW_HOURS: float = float(os.getenv("LOGIN_WINDOW_HOURS", 1))
+    LOGIN_WINDOW_HOURS: float = float(os.getenv("LOGIN_WINDOW_HOURS", 4))
     WELCOME_MESSAGE: str = os.getenv(
         "WELCOME_MESSAGE", "Hi {first_name}, great to see you back! We missed you at AfriMillions."
     )
@@ -50,7 +50,7 @@ class Settings:
     DATA_FOLDER: Path = BASE_DIR / os.getenv("DATA_FOLDER", "data")
     DB_PATH: Path = BASE_DIR / os.getenv("DB_PATH", "app/notified_users.db")
 
-    LOGIN_FILE_PATTERN: str = "Logins_*.csv"
+    LOGIN_FILE_PATTERN: str = "Login_*.csv"
     REGISTRATION_FILE_PATTERN: str = "Registrations_*.csv"
 
 
