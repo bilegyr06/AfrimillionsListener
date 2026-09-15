@@ -331,6 +331,51 @@ h3 { font-size: 15px; font-weight: 600; margin: 0; }
 
 .btn-sm { height: 30px; padding: 0 10px; font-size: 13px; }
 
+.btn-ghost { background: transparent; color: var(--text-muted); }
+.btn-ghost:hover { background: var(--surface-2); color: var(--text); }
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+/* Filter bar (SMS activity, uploads) */
+.filter-bar { flex-wrap: wrap; }
+
+.filter-bar label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.filter-bar select,
+.filter-bar input[type="date"] {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+}
+
+.filter-bar select:focus,
+.filter-bar input[type="date"]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.table-meta {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Forms                                                                       */
 /* -------------------------------------------------------------------------- */
