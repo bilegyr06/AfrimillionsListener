@@ -37,10 +37,8 @@ class Settings:
     }
 
     # Feature 1: welcome-back SMS for sign-ins that led to no game activity.
-    LOGIN_WINDOW_HOURS: float = float(os.getenv("LOGIN_WINDOW_HOURS", 4))  # legacy, unused by welcome flow
     WELCOME_EVAL_DELAY_HOURS: float = float(os.getenv("WELCOME_EVAL_DELAY_HOURS", 1))
     WELCOME_MAX_MESSAGES: int = int(os.getenv("WELCOME_MAX_MESSAGES", 3))  # 0 = unlimited
-    WELCOME_POST_TRACK_HOURS: float = float(os.getenv("WELCOME_POST_TRACK_HOURS", 24))  # 0 disables analytics
     WELCOME_POST_LIMIT_SUPPRESS: bool = (
         os.getenv("WELCOME_POST_LIMIT_SUPPRESS", "true").strip().lower()
         in ("1", "true", "yes", "on")
