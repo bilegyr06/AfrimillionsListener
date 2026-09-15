@@ -9,6 +9,7 @@ interface Props {
   confirmLabel?: string;
   danger?: boolean;
   busy?: boolean;
+  children?: React.ReactNode;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -20,6 +21,7 @@ export default function ConfirmDialog({
   confirmLabel = "Confirm",
   danger = false,
   busy = false,
+  children,
   onCancel,
   onConfirm,
 }: Props) {
@@ -49,6 +51,7 @@ export default function ConfirmDialog({
       </div>
       <div className="dialog-body">
         <p>{message}</p>
+        {children}
       </div>
       <div className="dialog-foot">
         <button className="btn btn-secondary btn-sm" disabled={busy} onClick={onCancel}>
