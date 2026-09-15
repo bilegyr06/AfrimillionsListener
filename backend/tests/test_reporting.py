@@ -40,7 +40,8 @@ def client(_init_db):
 
 
 class TestReportOverview:
-    def test_overview_shape(self, client):
+    def test_overview_shape(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "ENABLED_FEATURES", {"welcome", "inactive"})
         _log_sms("welcome", "u1", status="delivered")
         _log_sms("inactive", "u2", status="failed")
         r = client.get("/report/overview")
@@ -55,7 +56,8 @@ class TestReportOverview:
         assert data["files"]["total"] == 0
         assert data["wallet"] is None
 
-    def test_overview_with_active_campaign(self, client):
+    def test_overview_with_active_campaign(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "ENABLED_FEATURES", {"welcome", "inactive"})
         started = client.post("/campaign/start", json={"name": "Wave"}).json()
         data = client.get("/report/overview").json()
         assert data["campaign"]["active"] is True
@@ -69,7 +71,8 @@ class TestReportOverview:
 
 
 class TestSmsLogsPaginated:
-    def test_pagination(self, client):
+    def test_pagination(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "ENABLED_FEATURES", {"welcome", "inactive"})
         _log_sms("welcome", "u1")
         _log_sms("welcome", "u2")
         _log_sms("inactive", "u3")

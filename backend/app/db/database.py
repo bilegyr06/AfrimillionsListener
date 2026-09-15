@@ -778,19 +778,36 @@ def get_unsynced_sms(limit: int = 100) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def _sms_kind_clauses(kind: str | None, kinds: set[str] | None) -> tuple[list[str], list]:
+    """WHERE clauses for sms_log kind scoping.
+
+    `kinds` (a set) is used for active reporting scope (e.g. enabled features
+    plus manual); `kind` (a single value) is used for explicit feature-specific
+    or historical inspection. When both are given both apply; callers normally
+    pass exactly one.
+    """
+    clauses: list[str] = []
+    params: list = []
+    if kinds:
+        placeholders = ",".join("?" * len(kinds))
+        clauses.append(f"kind IN ({placeholders})")
+        params.extend(sorted(kinds))
+    elif kind:
+        clauses.append("kind = ?")
+        params.append(kind)
+    return clauses, params
+
+
 def get_sms_logs(
     kind: str | None = None,
+    kinds: set[str] | None = None,
     since: str | None = None,
     until: str | None = None,
     limit: int | None = None,
     offset: int = 0,
 ) -> list[dict]:
-    """Query SMS logs with optional kind and date-range filters."""
-    clauses: list[str] = []
-    params: list = []
-    if kind:
-        clauses.append("kind = ?")
-        params.append(kind)
+    """Query SMS logs with optional kind/kinds and date-range filters."""
+    clauses, params = _sms_kind_clauses(kind, kinds)
     if since:
         clauses.append("sent_at >= ?")
         params.append(since)
@@ -812,15 +829,12 @@ def get_sms_logs(
 
 def count_sms_logs(
     kind: str | None = None,
+    kinds: set[str] | None = None,
     since: str | None = None,
     until: str | None = None,
 ) -> int:
     """Count SMS log rows matching the same filters as get_sms_logs."""
-    clauses: list[str] = []
-    params: list = []
-    if kind:
-        clauses.append("kind = ?")
-        params.append(kind)
+    clauses, params = _sms_kind_clauses(kind, kinds)
     if since:
         clauses.append("sent_at >= ?")
         params.append(since)
@@ -837,15 +851,12 @@ def count_sms_logs(
 
 def get_stats_summary(
     kind: str | None = None,
+    kinds: set[str] | None = None,
     since: str | None = None,
     until: str | None = None,
 ) -> dict:
     """Return aggregated statistics for the sms_log table."""
-    clauses: list[str] = []
-    params: list = []
-    if kind:
-        clauses.append("kind = ?")
-        params.append(kind)
+    clauses, params = _sms_kind_clauses(kind, kinds)
     if since:
         clauses.append("sent_at >= ?")
         params.append(since)

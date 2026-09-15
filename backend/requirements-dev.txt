@@ -1,0 +1,5 @@
+# Test/dev dependencies. Kept separate from requirements.txt so the runtime
+# image (see Dockerfile) does not install the test toolchain.
+-r requirements.txt
+pytest>=8.0
+pytest-asyncio>=1.0
