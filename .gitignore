@@ -4,6 +4,8 @@ __pycache__/
 .env
 notified_users.db
 data/
+database/
+logs/
 webview/
 docs/
 .pytest-tmp/

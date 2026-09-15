@@ -4,20 +4,25 @@ import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app import state
 from app.config import settings
 from app.database import (
+    close_active_campaign,
+    create_campaign,
+    get_active_campaign,
+    get_campaign_stats,
     get_cycle_stats,
     get_sms_logs,
     get_stats_summary,
     get_wallet_history,
-    get_welcome_analytics,
     init_db,
+    list_campaigns,
 )
 from app.messager import aclose_client, send_sms
-from app.processor import begin_cycle, WELCOME, INACTIVE
+from app.processor import finalize_campaign, begin_cycle, WELCOME, INACTIVE
 from app.stats_updater import sync_delivery_statuses
 from app.termii_insights import get_balance
 from app.watcher import start_watcher
@@ -65,8 +70,6 @@ async def lifespan(app: FastAPI):
     print(f"  Welcome max messages: {'unlimited' if settings.WELCOME_MAX_MESSAGES == 0 else settings.WELCOME_MAX_MESSAGES} "
           f"(post-limit suppress: {'on' if settings.WELCOME_POST_LIMIT_SUPPRESS else 'off'})")
     print(f"  Cooldown: {settings.COOLDOWN_HOURS}h")
-    print(f"  Welcome post-send tracking window: {settings.WELCOME_POST_TRACK_HOURS}h"
-          f"{' (disabled)' if settings.WELCOME_POST_TRACK_HOURS <= 0 else ''}")
     print(f"  Max messages: {'unlimited' if settings.MAX_MESSAGES == 0 else settings.MAX_MESSAGES}")
     print(f"  Max concurrent SMS: {settings.MAX_CONCURRENCY}")
 
@@ -150,13 +153,6 @@ def stats_welcome(
     return get_stats_summary(kind="welcome", since=since, until=until)
 
 
-@app.get("/stats/welcome/tracking")
-def stats_welcome_tracking(limit: int = Query(50, ge=1, le=1000)):
-    """Post-send analytics: whether welcomed users went on to play within their
-    tracking window. Review only; does not affect sending."""
-    return get_welcome_analytics(limit)
-
-
 @app.get("/stats/inactive")
 def stats_inactive(
     since: str | None = Query(None),
@@ -190,3 +186,55 @@ async def stats_balance():
 async def stats_sync():
     result = await sync_delivery_statuses()
     return result
+
+
+# ---------------------------------------------------------------------------
+# Welcome campaign endpoints (operator-driven lifecycle)
+# ---------------------------------------------------------------------------
+
+class CampaignStartRequest(BaseModel):
+    name: str | None = Field(None, max_length=200, description="Optional campaign label")
+
+
+@app.get("/campaign/current")
+def campaign_current():
+    """The active campaign and its dashboard numbers, or active: false."""
+    campaign = get_active_campaign()
+    if campaign is None:
+        return {"active": False}
+    return {"active": True, "campaign": campaign, "stats": get_campaign_stats(campaign["id"])}
+
+
+@app.get("/campaigns")
+def campaigns(limit: int = Query(50, ge=1, le=1000)):
+    """Campaign list (newest first) with per-campaign dashboard numbers."""
+    return [
+        {"campaign": c, "stats": get_campaign_stats(c["id"])}
+        for c in list_campaigns(limit)
+    ]
+
+
+@app.post("/campaign/start")
+def campaign_start(req: CampaignStartRequest | None = None):
+    """Start a new campaign. Any active campaign is closed at this instant."""
+    result = create_campaign(req.name if req else None)
+    closed = result["closed_campaign"]
+    if closed:
+        finalize_campaign(closed["id"])
+    return {
+        "campaign": result["campaign"],
+        "stats": get_campaign_stats(result["campaign"]["id"]),
+        "closed_campaign": (
+            {"campaign": closed, "stats": get_campaign_stats(closed["id"])} if closed else None
+        ),
+    }
+
+
+@app.post("/campaign/close")
+def campaign_close():
+    """Close the active campaign, run final attribution, and finalize outcomes."""
+    closed = close_active_campaign()
+    if closed is None:
+        return JSONResponse({"message": "No active campaign to close."}, status_code=404)
+    finalize_campaign(closed["id"])
+    return {"campaign": closed, "stats": get_campaign_stats(closed["id"])}
