@@ -250,7 +250,13 @@ export default function DashboardPage() {
           </div>
           <div className="stat-tier-sm">
             <Stat label="Deferred" value={formatNumber(sms.deferred)} />
+            <Stat label="Blocked (DND)" value={formatNumber(sms.dnd)} />
+            <Stat label="Rejected" value={formatNumber(sms.rejected)} />
+            <Stat label="Expired" value={formatNumber(sms.expired)} />
+          </div>
+          <div className="stat-tier">
             <Stat label="Sent today" value={formatNumber(sms.today)} />
+            <Stat label="Total" value={formatNumber(sms.total)} />
             <Stat label="Total cost" value={formatMoney(sms.total_cost)} />
           </div>
           {balance.data && (

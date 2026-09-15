@@ -225,15 +225,17 @@ h3 { font-size: 15px; font-weight: 600; margin: 0; }
   gap: 0;
 }
 
-/* Secondary tier: operational breakdown, aligned under the primary tier */
+/* Secondary tier: remaining delivery outcomes (DND/rejected/expired) */
 .stat-tier-sm {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 0;
   border-top: 1px solid var(--border);
 }
 
 .stat-tier-sm .stat { padding: 14px 20px; }
+
+.stat-tier-sm + .stat-tier { border-top: 1px solid var(--border); }
 
 /* Balance display rows */
 .balance-row {
