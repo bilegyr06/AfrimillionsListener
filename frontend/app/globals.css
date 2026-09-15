@@ -288,6 +288,9 @@ h3 { font-size: 15px; font-weight: 600; margin: 0; }
 .table .small { font-size: 13px; }
 .table .right { text-align: right; }
 
+.table .row-active td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.table .row-active td { background: var(--surface-2); }
+
 .table-link { color: var(--accent); }
 .table-link:hover { text-decoration: underline; }
 
