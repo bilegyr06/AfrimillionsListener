@@ -40,23 +40,48 @@ def init_db():
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS welcome_sent (
-            user_id TEXT PRIMARY KEY,
-            last_login_at TEXT NOT NULL,
-            sent_at TEXT NOT NULL
+        CREATE TABLE IF NOT EXISTS welcome_campaigns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL
         )
         """
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS welcome_analytics (
+        CREATE TABLE IF NOT EXISTS welcome_opportunities (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sms_log_id INTEGER NOT NULL UNIQUE,
+            campaign_id INTEGER NOT NULL,
             user_id TEXT NOT NULL,
+            first_name TEXT,
+            phone_raw TEXT,
+            phone_normalized TEXT,
+            login_at TEXT NOT NULL,
+            eval_delay_hours REAL NOT NULL,
+            status TEXT NOT NULL DEFAULT 'created',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (campaign_id, user_id, login_at)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS welcome_interventions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            opportunity_id INTEGER NOT NULL UNIQUE,
+            campaign_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            login_at TEXT NOT NULL,
             sent_at TEXT NOT NULL,
-            cycle_id TEXT,
-            window_hours REAL NOT NULL,
-            first_play_at TEXT,
+            message_id TEXT,
+            status TEXT NOT NULL DEFAULT 'open',
+            play_at TEXT,
+            response_seconds REAL,
+            created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
         """
@@ -89,6 +114,27 @@ def init_db():
     )
     _ensure_column(conn, "pending_queue", "kind", "TEXT NOT NULL DEFAULT 'inactive'")
     _ensure_column(conn, "pending_queue", "last_login_at", "TEXT NOT NULL DEFAULT ''")
+
+    # Legacy welcome tables are no longer sources of truth; the state now lives
+    # in campaigns/opportunities/interventions. Dropping them is the migration.
+    conn.execute("DROP TABLE IF EXISTS welcome_sent")
+    conn.execute("DROP TABLE IF EXISTS welcome_analytics")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_opps_campaign_status "
+        "ON welcome_opportunities (campaign_id, status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_interventions_campaign "
+        "ON welcome_interventions (campaign_id, status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_interventions_user "
+        "ON welcome_interventions (user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_interventions_opp "
+        "ON welcome_interventions (opportunity_id)"
+    )
     conn.commit()
     conn.close()
 
@@ -246,48 +292,19 @@ def has_pending(kind: str) -> bool:
     return row["n"] > 0
 
 
-def get_welcome_sent() -> dict[str, str]:
-    """Map of user_id -> last_login_at for users already sent a welcome SMS."""
-    conn = get_connection()
-    rows = conn.execute("SELECT user_id, last_login_at FROM welcome_sent").fetchall()
-    conn.close()
-    return {str(row["user_id"]): row["last_login_at"] for row in rows}
-
-
-def upsert_welcome_sent(records: list[dict]):
-    """Mark users as welcomed for a given login event.
-
-    records: list of {"user_id", "last_login_at"}
-    """
-    if not records:
-        return
-    now = datetime.now(timezone.utc).isoformat()
-    conn = get_connection()
-    conn.executemany(
-        """
-        INSERT OR REPLACE INTO welcome_sent (user_id, last_login_at, sent_at)
-        VALUES (?, ?, ?)
-        """,
-        [(r["user_id"], r["last_login_at"], now) for r in records],
-    )
-    conn.commit()
-    conn.close()
-
-
 def get_welcome_sms_state() -> dict[str, dict]:
-    """Welcome campaign state per user, derived from the SMS send log.
+    """Welcome campaign state per user, derived from successful interventions.
 
-    Returns {user_id: {"count": n, "last_sent_at": iso}} for welcome messages
-    that were actually handed off (status 'sent' or 'delivered'). Cooldown and
-    the notification cap are computed from this rather than stored, so the
-    source of truth is the actual send history.
+    Returns {user_id: {"count": n, "last_sent_at": iso}}. Only interventions
+    are counted here — they exist solely for Termii-accepted sends, so failed
+    or deferred attempts never consume a cooldown or cap slot. The cap is
+    cumulative across all campaigns and never resets.
     """
     conn = get_connection()
     rows = conn.execute(
         """
         SELECT user_id, COUNT(*) AS count, MAX(sent_at) AS last_sent_at
-        FROM sms_log
-        WHERE kind = 'welcome' AND status IN ('sent', 'delivered')
+        FROM welcome_interventions
         GROUP BY user_id
         """
     ).fetchall()
@@ -296,103 +313,311 @@ def get_welcome_sms_state() -> dict[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# Welcome post-send analytics (review only; does not affect sending)
+# Welcome campaigns
 # ---------------------------------------------------------------------------
 
-def ingest_welcome_analytics(window_hours: float):
-    """Copy welcome sends from sms_log into welcome_analytics (once each).
+def create_campaign(name: str | None = None) -> dict:
+    """Start a new campaign, closing any currently active one at its end.
 
-    Each successful welcome handoff gets one analytics row; re-runs are no-ops
-    thanks to the unique sms_log_id constraint.
+    Starting a campaign is the only way a campaign window is opened; campaigns
+    are never auto-created. Returns the new campaign plus the campaign that was
+    closed by this transition (if any).
     """
     now = datetime.now(timezone.utc).isoformat()
     conn = get_connection()
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO welcome_analytics
-            (sms_log_id, user_id, sent_at, cycle_id, window_hours, updated_at)
-        SELECT id, user_id, sent_at, cycle_id, ?, ?
-        FROM sms_log
-        WHERE kind = 'welcome' AND status IN ('sent', 'delivered')
-        """,
-        (window_hours, now),
+    closed = None
+    active = conn.execute(
+        "SELECT * FROM welcome_campaigns WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if active:
+        conn.execute(
+            "UPDATE welcome_campaigns SET ended_at = ?, status = 'closed' WHERE id = ?",
+            (now, active["id"]),
+        )
+        closed = dict(active)
+
+    cursor = conn.execute(
+        "INSERT INTO welcome_campaigns (name, started_at, status, created_at) "
+        "VALUES (?, ?, 'active', ?)",
+        (name, now, now),
+    )
+    new = dict(
+        conn.execute("SELECT * FROM welcome_campaigns WHERE id = ?", (cursor.lastrowid,)).fetchone()
     )
     conn.commit()
     conn.close()
+    return {"campaign": new, "closed_campaign": closed}
 
 
-def get_open_welcome_tracking() -> list[dict]:
-    """Welcome analytics rows that have not yet recorded a post-send play."""
+def close_active_campaign() -> dict | None:
+    """Close the active campaign (if any). Returns the closed campaign or None."""
+    conn = get_connection()
+    active = conn.execute(
+        "SELECT * FROM welcome_campaigns WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if not active:
+        conn.close()
+        return None
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "UPDATE welcome_campaigns SET ended_at = ?, status = 'closed' WHERE id = ?",
+        (now, active["id"]),
+    )
+    closed = dict(
+        conn.execute("SELECT * FROM welcome_campaigns WHERE id = ?", (active["id"],)).fetchone()
+    )
+    conn.commit()
+    conn.close()
+    return closed
+
+
+def get_active_campaign() -> dict | None:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM welcome_campaigns WHERE status = 'active' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_campaign(campaign_id: int) -> dict | None:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM welcome_campaigns WHERE id = ?", (campaign_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def list_campaigns(limit: int = 50) -> list[dict]:
     conn = get_connection()
     rows = conn.execute(
-        """
-        SELECT sms_log_id, user_id, sent_at, window_hours
-        FROM welcome_analytics
-        WHERE first_play_at IS NULL
-        ORDER BY id
-        """
+        "SELECT * FROM welcome_campaigns ORDER BY id DESC LIMIT ?", (limit,)
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 
-def update_welcome_play(sms_log_id: int, first_play_at: str):
-    """Record the earliest confirmed play within the post-send window."""
+# ---------------------------------------------------------------------------
+# Welcome opportunities (one per login within a campaign)
+# ---------------------------------------------------------------------------
+
+def upsert_opportunities(records: list[dict]):
+    """Insert login opportunities for a campaign, ignoring duplicates.
+
+    records: list of {"campaign_id", "user_id", "first_name", "phone_raw",
+                      "phone_normalized", "login_at", "eval_delay_hours"}
+    Idempotency key: (campaign_id, user_id, login_at).
+    """
+    if not records:
+        return
+    now = datetime.now(timezone.utc).isoformat()
     conn = get_connection()
-    conn.execute(
+    conn.executemany(
         """
-        UPDATE welcome_analytics SET first_play_at = ?, updated_at = ?
-        WHERE sms_log_id = ?
+        INSERT OR IGNORE INTO welcome_opportunities
+            (campaign_id, user_id, first_name, phone_raw, phone_normalized,
+             login_at, eval_delay_hours, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'created', ?, ?)
         """,
-        (first_play_at, datetime.now(timezone.utc).isoformat(), sms_log_id),
+        [
+            (
+                r["campaign_id"],
+                r["user_id"],
+                r.get("first_name"),
+                r.get("phone_raw"),
+                r.get("phone_normalized"),
+                r["login_at"],
+                r["eval_delay_hours"],
+                now,
+                now,
+            )
+            for r in records
+        ],
     )
     conn.commit()
     conn.close()
 
 
-def get_welcome_analytics(limit: int = 50) -> dict:
-    """Summarize post-send tracking and return the most recent rows.
-
-    pending = sends still inside their tracking window with no recorded play;
-    no_response = sends whose window has closed with no recorded play;
-    responded = sends with a recorded play inside the window.
-    """
+def get_open_opportunities(campaign_id: int) -> list[dict]:
+    """Opportunities still awaiting evaluation (status 'created')."""
     conn = get_connection()
     rows = conn.execute(
         """
-        SELECT sms_log_id, user_id, sent_at, cycle_id, window_hours, first_play_at, updated_at
-        FROM welcome_analytics
-        ORDER BY id
-        """
+        SELECT * FROM welcome_opportunities
+        WHERE campaign_id = ? AND status = 'created'
+        ORDER BY login_at
+        """,
+        (campaign_id,),
     ).fetchall()
     conn.close()
+    return [dict(row) for row in rows]
 
-    now = datetime.now(timezone.utc)
-    responded = 0
-    pending = 0
-    no_response = 0
-    for row in rows:
-        if row["first_play_at"]:
-            responded += 1
-            continue
-        sent = datetime.fromisoformat(row["sent_at"])
-        if sent.tzinfo is None:
-            sent = sent.replace(tzinfo=timezone.utc)
-        if sent + timedelta(hours=row["window_hours"]) > now:
-            pending += 1
-        else:
-            no_response += 1
 
-    resolved = responded + no_response
+def update_opportunity_status(opportunity_id: int, status: str):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE welcome_opportunities SET status = ?, updated_at = ? WHERE id = ?",
+        (status, datetime.now(timezone.utc).isoformat(), opportunity_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def mark_opportunities_expired(campaign_id: int):
+    """Expire every un-evaluated opportunity of a closed campaign.
+
+    A login whose evaluation never ran before the campaign ended cannot be
+    carried into the next campaign, so it becomes terminal 'expired'.
+    """
+    conn = get_connection()
+    conn.execute(
+        "UPDATE welcome_opportunities SET status = 'expired', updated_at = ? "
+        "WHERE campaign_id = ? AND status = 'created'",
+        (datetime.now(timezone.utc).isoformat(), campaign_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Welcome interventions (one per successful send)
+# ---------------------------------------------------------------------------
+
+def create_intervention(
+    opportunity_id: int,
+    campaign_id: int,
+    user_id: str,
+    login_at: str,
+    sent_at: str,
+    message_id: str | None,
+) -> int:
+    """Record a successful send. One intervention per opportunity.
+
+    The unique opportunity_id guarantees a login is never rewarded twice.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    cursor = conn.execute(
+        """
+        INSERT OR IGNORE INTO welcome_interventions
+            (opportunity_id, campaign_id, user_id, login_at, sent_at, message_id,
+             status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
+        """,
+        (opportunity_id, campaign_id, user_id, login_at, sent_at, message_id, now, now),
+    )
+    conn.commit()
+    conn.close()
+    return cursor.lastrowid
+
+
+def get_open_interventions(campaign_id: int) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT * FROM welcome_interventions
+        WHERE campaign_id = ? AND status = 'open'
+        ORDER BY id
+        """,
+        (campaign_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def record_intervention_response(intervention_id: int, play_at: str, response_seconds: float):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE welcome_interventions SET status = 'responded', play_at = ?, "
+        "response_seconds = ?, updated_at = ? WHERE id = ?",
+        (play_at, response_seconds, datetime.now(timezone.utc).isoformat(), intervention_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def close_open_interventions(campaign_id: int):
+    """Mark every still-open intervention of a campaign as 'no_response'."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE welcome_interventions SET status = 'no_response', updated_at = ? "
+        "WHERE campaign_id = ? AND status = 'open'",
+        (datetime.now(timezone.utc).isoformat(), campaign_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_cap_usage(user_id: str) -> int:
+    """Successful welcome sends for a user, cumulative across campaigns."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM welcome_interventions WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    return row["n"]
+
+
+def get_last_welcome_sent(user_id: str) -> str | None:
+    """ISO sent_at of the user's most recent successful welcome send, or None."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT MAX(sent_at) AS last_sent_at FROM welcome_interventions WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    return row["last_sent_at"]
+
+
+def count_opportunities(campaign_id: int) -> dict:
+    """Opportunity breakdown for a campaign: {status: count, total: n}."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT status, COUNT(*) AS n FROM welcome_opportunities "
+        "WHERE campaign_id = ? GROUP BY status",
+        (campaign_id,),
+    ).fetchall()
+    conn.close()
+    counts = {str(row["status"]): row["n"] for row in rows}
+    return {**counts, "total": sum(counts.values())}
+
+
+def count_interventions(campaign_id: int) -> dict:
+    """Intervention breakdown for a campaign: {status: count, total: n}."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT status, COUNT(*) AS n FROM welcome_interventions "
+        "WHERE campaign_id = ? GROUP BY status",
+        (campaign_id,),
+    ).fetchall()
+    conn.close()
+    counts = {str(row["status"]): row["n"] for row in rows}
+    return {**counts, "total": sum(counts.values())}
+
+
+def get_campaign_stats(campaign_id: int) -> dict:
+    """Aggregate dashboard numbers for a campaign."""
+    opportunities = count_opportunities(campaign_id)
+    interventions = count_interventions(campaign_id)
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT AVG(response_seconds) AS avg_response_seconds, "
+        "COUNT(*) AS total FROM welcome_interventions "
+        "WHERE campaign_id = ? AND response_seconds IS NOT NULL",
+        (campaign_id,),
+    ).fetchone()
+    conn.close()
+
+    sent = interventions.get("total", 0)
+    responded = interventions.get("responded", 0)
     return {
-        "summary": {
-            "tracked": len(rows),
-            "responded": responded,
-            "pending": pending,
-            "no_response": no_response,
-            "response_rate": round(responded / resolved, 4) if resolved else None,
-        },
-        "recent": [dict(row) for row in reversed(rows[-limit:])],
+        "campaign_id": campaign_id,
+        "opportunities": opportunities,
+        "interventions": interventions,
+        "response_rate": round(responded / sent, 4) if sent else None,
+        "avg_response_seconds": row["avg_response_seconds"],
     }
 
 
