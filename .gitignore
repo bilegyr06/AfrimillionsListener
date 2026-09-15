@@ -5,6 +5,7 @@ __pycache__/
 notified_users.db
 data/
 database/
+!frontend/app/data/
 logs/
 webview/
 docs/
