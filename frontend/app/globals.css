@@ -218,6 +218,45 @@ h3 { font-size: 15px; font-weight: 600; margin: 0; }
 .stat .value.accent { color: var(--accent); }
 .stat .sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 
+/* Primary tier: main counts, 3 columns */
+.stat-tier {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+}
+
+/* Secondary tier: operational breakdown, aligned under the primary tier */
+.stat-tier-sm {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  border-top: 1px solid var(--border);
+}
+
+.stat-tier-sm .stat { padding: 14px 20px; }
+
+/* Balance display rows */
+.balance-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.balance-row strong { font-weight: 600; color: var(--text); }
+
+.balance-error {
+  margin: 0;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--bad);
+  line-height: 1.4;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Key/value lists (campaign config)                                           */
 /* -------------------------------------------------------------------------- */
@@ -697,4 +736,6 @@ h3 { font-size: 15px; font-weight: 600; margin: 0; }
 @media (max-width: 640px) {
   .stat { min-width: 100%; }
   .table .hide-sm { display: none; }
+  .stat-tier,
+  .stat-tier-sm { grid-template-columns: 1fr; }
 }

@@ -242,44 +242,40 @@ export default function DashboardPage() {
         <div className="section-head">
           <h2>SMS traffic</h2>
         </div>
-        <div className="section-body flush" style={{ paddingBottom: 0 }}>
-          <div className="stat-strip" style={{ border: "none", borderRadius: 0 }}>
+        <div className="section-body flush">
+          <div className="stat-tier">
             <Stat label="Delivered" value={formatNumber(sms.delivered)} />
             <Stat label="Sent (awaiting delivery)" value={formatNumber(sms.sent - sms.delivered)} sub={`${formatNumber(sms.sent)} accepted total`} />
             <Stat label="Failed" value={formatNumber(sms.failed)} />
+          </div>
+          <div className="stat-tier-sm">
             <Stat label="Deferred" value={formatNumber(sms.deferred)} />
             <Stat label="Sent today" value={formatNumber(sms.today)} />
             <Stat label="Total cost" value={formatMoney(sms.total_cost)} />
           </div>
-        </div>
-        {balance.data && (
-          <div className="section-body" style={{ paddingTop: 12 }}>
-            <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+          {balance.data && (
+            <div className="balance-row">
               Live balance{" "}
-              <strong style={{ fontWeight: 600 }}>
-                {formatMoney(balance.data.balance, balance.data.currency)}
-              </strong>{" "}
-              ·{" "}
+              <strong>{formatMoney(balance.data.balance, balance.data.currency)}</strong>
               {balanceAt
-                ? `Updated ${Math.max(0, Math.round((nowTs - balanceAt) / 1000))}s ago · as of ${formatTime(
+                ? ` · Updated ${Math.max(0, Math.round((nowTs - balanceAt) / 1000))}s ago · as of ${formatTime(
                     new Date(balanceAt).toISOString(),
                   )}`
-                : "checking…"}
+                : " · checking…"}
+            </div>
+          )}
+          {balance.error && (
+            <p className="balance-error">
+              Live balance unavailable ({balance.error}); showing last known value — retries automatically.
             </p>
-            {balance.error && (
-              <p className="muted" style={{ margin: "6px 0 0", fontSize: 12, color: "#c0392b" }}>
-                Live balance unavailable ({balance.error}); showing last known value — retries automatically.
-              </p>
-            )}
-          </div>
-        )}
-        {data.wallet && (
-          <div className="section-body" style={{ paddingTop: 12 }}>
-            <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-              Balance {formatMoney(data.wallet.balance, data.wallet.currency)} · recorded {formatTime(data.wallet.fetched_at)}
-            </p>
-          </div>
-        )}
+          )}
+          {data.wallet && (
+            <div className="balance-row">
+              Balance{" "}
+              <strong>{formatMoney(data.wallet.balance, data.wallet.currency)}</strong> · recorded {formatTime(data.wallet.fetched_at)}
+            </div>
+          )}
+        </div>
       </section>
 
       <section className="section">
