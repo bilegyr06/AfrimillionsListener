@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CloseCampaignDialog,
   StartCampaignDialog,
@@ -52,6 +52,32 @@ export default function DashboardPage() {
     [],
   );
   const recent = useQuery<Paged<SmsLogEntry>>(() => apiGet("/sms/logs", { page_size: 8 }), []);
+
+  const [balanceAt, setBalanceAt] = useState<number | null>(null);
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  const balance = useQuery<{ balance: number; currency: string }>(
+    () =>
+      apiGet<{ balance: number; currency: string }>("/stats/balance").then((b) => {
+        setBalanceAt(Date.now());
+        return b;
+      }),
+    [],
+    15000,
+  );
+  useEffect(() => {
+    const id = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    const onVisible = () =>
+      document.visibilityState === "visible" && balance.reload();
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [balance.reload]);
 
   const current = overview.data?.campaign.current ?? null;
   const active = overview.data?.campaign.active ?? false;
@@ -226,6 +252,27 @@ export default function DashboardPage() {
             <Stat label="Total cost" value={formatMoney(sms.total_cost)} />
           </div>
         </div>
+        {balance.data && (
+          <div className="section-body" style={{ paddingTop: 12 }}>
+            <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+              Live balance{" "}
+              <strong style={{ fontWeight: 600 }}>
+                {formatMoney(balance.data.balance, balance.data.currency)}
+              </strong>{" "}
+              ·{" "}
+              {balanceAt
+                ? `Updated ${Math.max(0, Math.round((nowTs - balanceAt) / 1000))}s ago · as of ${formatTime(
+                    new Date(balanceAt).toISOString(),
+                  )}`
+                : "checking…"}
+            </p>
+            {balance.error && (
+              <p className="muted" style={{ margin: "6px 0 0", fontSize: 12, color: "#c0392b" }}>
+                Live balance unavailable ({balance.error}); showing last known value — retries automatically.
+              </p>
+            )}
+          </div>
+        )}
         {data.wallet && (
           <div className="section-body" style={{ paddingTop: 12 }}>
             <p className="muted" style={{ margin: 0, fontSize: 13 }}>
