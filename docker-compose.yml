@@ -14,3 +14,15 @@ services:
       - DATA_FOLDER=/app/data
       - DB_PATH=/app/database/notified_users.db
       - TZ=Africa/Lagos
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        API_URL: http://afrimillions:8000
+    container_name: afrimillions_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - afrimillions
