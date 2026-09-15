@@ -161,6 +161,16 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_interventions_opp "
         "ON welcome_interventions (opportunity_id)"
     )
+    # sms_log is the delivery-funnel source. These cover the message_id lookups
+    # (update_sms_status, get_unsynced_sms, statistics joins) and the
+    # (kind, status, sent_at) filter aggregates used by SMS reporting.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sms_message_id ON sms_log (message_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sms_kind_status_sent "
+        "ON sms_log (kind, status, sent_at)"
+    )
     conn.commit()
     conn.close()
 
@@ -678,6 +688,226 @@ def count_campaign_customers(campaign_id: int) -> int:
     ).fetchone()
     conn.close()
     return row["n"]
+
+
+# ---------------------------------------------------------------------------
+# Campaign statistics (reporting contract, see app.services.statistics)
+# ---------------------------------------------------------------------------
+#
+# These functions only aggregate; all presentation framing lives in
+# app.services.statistics. They intentionally never fetch per-customer rows
+# into the caller.
+
+def get_campaign_audience(campaign_id: int) -> dict:
+    """Opportunity counts per status plus distinct customers for a campaign.
+
+    `opportunities` counts welcome_opportunities rows (one login inside the
+    window); `unique_customers` counts distinct user_id across them.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT status, COUNT(*) AS rows, COUNT(DISTINCT user_id) AS users
+        FROM welcome_opportunities
+        WHERE campaign_id = ?
+        GROUP BY status
+        """,
+        (campaign_id,),
+    ).fetchall()
+    total = conn.execute(
+        "SELECT COUNT(DISTINCT user_id) AS users "
+        "FROM welcome_opportunities WHERE campaign_id = ?",
+        (campaign_id,),
+    ).fetchone()["users"]
+    conn.close()
+    statuses = {row["status"]: {"rows": row["rows"], "users": row["users"]} for row in rows}
+    return {
+        "opportunities": sum(s["rows"] for s in statuses.values()),
+        "unique_customers": total,
+        "statuses": statuses,
+    }
+
+
+def get_campaign_intervention_counts(campaign_id: int) -> dict:
+    """Accepted-send (intervention) counts per status plus distinct customers.
+
+    `contacted_customers` = distinct users with an accepted Welcome SMS;
+    `converted_customers` = distinct users with a responded intervention;
+    `conversion_events` = responded interventions (a customer's first
+    qualifying play; later plays are not stored yet); `pending_outcome` =
+    interventions still awaiting a response.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT status, COUNT(*) AS rows, COUNT(DISTINCT user_id) AS users
+        FROM welcome_interventions
+        WHERE campaign_id = ?
+        GROUP BY status
+        """,
+        (campaign_id,),
+    ).fetchall()
+    contacted = conn.execute(
+        "SELECT COUNT(DISTINCT user_id) AS users "
+        "FROM welcome_interventions WHERE campaign_id = ?",
+        (campaign_id,),
+    ).fetchone()["users"]
+    conn.close()
+    statuses = {row["status"]: {"rows": row["rows"], "users": row["users"]} for row in rows}
+    responded = statuses.get("responded", {"rows": 0, "users": 0})
+    return {
+        "accepted": sum(s["rows"] for s in statuses.values()),
+        "contacted_customers": contacted,
+        "converted_customers": responded["users"],
+        "conversion_events": responded["rows"],
+        "pending_outcome": statuses.get("open", {}).get("rows", 0),
+        "statuses": statuses,
+    }
+
+
+def get_campaign_sms_funnel(campaign_id: int) -> dict:
+    """Termii delivery outcomes for a campaign's accepted Welcome SMS.
+
+    Acceptance lives in welcome_interventions; provider delivery status lives
+    in sms_log. The two are joined on message_id (both set from the same Termii
+    dispatch). `unmatched` counts accepted sends with no sms_log row.
+    """
+    conn = get_connection()
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS accepted,
+            COUNT(DISTINCT i.user_id) AS contacted_customers,
+            COALESCE(SUM(CASE WHEN s.id IS NULL THEN 1 ELSE 0 END), 0) AS unmatched,
+            COALESCE(SUM(CASE WHEN s.status = 'delivered' THEN 1 ELSE 0 END), 0) AS delivered,
+            COALESCE(SUM(CASE WHEN s.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+            COALESCE(SUM(CASE WHEN s.status = 'rejected' THEN 1 ELSE 0 END), 0) AS rejected,
+            COALESCE(SUM(CASE WHEN s.status = 'expired' THEN 1 ELSE 0 END), 0) AS expired,
+            COALESCE(SUM(CASE WHEN s.status = 'dnd' THEN 1 ELSE 0 END), 0) AS dnd,
+            COALESCE(SUM(CASE WHEN s.status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
+            COALESCE(SUM(s.cost), 0) AS cost
+        FROM welcome_interventions i
+        LEFT JOIN sms_log s ON s.message_id = i.message_id
+        WHERE i.campaign_id = ?
+        """,
+        (campaign_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row)
+
+
+def get_campaign_response_plays(campaign_id: int) -> list[dict]:
+    """First-qualifying-play records for a campaign's converted customers.
+
+    Returns rows with `play_at` (ISO timestamp or None) and `response_seconds`
+    (float or None), ordered by response time.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT play_at, response_seconds
+        FROM welcome_interventions
+        WHERE campaign_id = ? AND status = 'responded'
+        ORDER BY response_seconds
+        """,
+        (campaign_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_campaigns_audience() -> dict[int, dict]:
+    """Audience aggregates for every campaign, keyed by campaign_id."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT campaign_id, COUNT(*) AS rows, COUNT(DISTINCT user_id) AS users "
+        "FROM welcome_opportunities GROUP BY campaign_id"
+    ).fetchall()
+    conn.close()
+    return {
+        row["campaign_id"]: {
+            "opportunities": row["rows"],
+            "unique_customers": row["users"],
+        }
+        for row in rows
+    }
+
+
+def get_campaigns_interventions() -> dict[int, dict]:
+    """Intervention aggregates for every campaign, keyed by campaign_id."""
+    conn = get_connection()
+    per_status = conn.execute(
+        "SELECT campaign_id, status, COUNT(*) AS rows, COUNT(DISTINCT user_id) AS users "
+        "FROM welcome_interventions GROUP BY campaign_id, status"
+    ).fetchall()
+    contacted = conn.execute(
+        "SELECT campaign_id, COUNT(DISTINCT user_id) AS users "
+        "FROM welcome_interventions GROUP BY campaign_id"
+    ).fetchall()
+    avg = conn.execute(
+        "SELECT campaign_id, AVG(response_seconds) AS avg_response_seconds "
+        "FROM welcome_interventions "
+        "WHERE status = 'responded' AND response_seconds IS NOT NULL "
+        "GROUP BY campaign_id"
+    ).fetchall()
+    conn.close()
+    out: dict[int, dict] = {}
+    for row in per_status:
+        d = out.setdefault(
+            row["campaign_id"],
+            {
+                "accepted": 0,
+                "contacted_customers": 0,
+                "converted_customers": 0,
+                "conversion_events": 0,
+                "still_open": 0,
+                "avg_response_seconds": None,
+            },
+        )
+        d["accepted"] += row["rows"]
+        if row["status"] == "responded":
+            d["conversion_events"] += row["rows"]
+            d["converted_customers"] += row["users"]
+        elif row["status"] == "open":
+            d["still_open"] += row["rows"]
+    for row in contacted:
+        d = out.setdefault(row["campaign_id"], {})
+        d["contacted_customers"] = row["users"]
+    for row in avg:
+        d = out.setdefault(row["campaign_id"], {})
+        d["avg_response_seconds"] = (
+            round(row["avg_response_seconds"], 1)
+            if row["avg_response_seconds"] is not None
+            else None
+        )
+    return out
+
+
+def get_campaigns_sms_funnel() -> dict[int, dict]:
+    """Delivery-funnel aggregates for every campaign, keyed by campaign_id."""
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT i.campaign_id,
+               COUNT(*) AS accepted,
+               COUNT(DISTINCT i.user_id) AS contacted_customers,
+               COALESCE(SUM(CASE WHEN s.status = 'delivered' THEN 1 ELSE 0 END), 0) AS delivered,
+               COALESCE(SUM(s.cost), 0) AS cost
+        FROM welcome_interventions i
+        LEFT JOIN sms_log s ON s.message_id = i.message_id
+        GROUP BY i.campaign_id
+        """
+    ).fetchall()
+    conn.close()
+    return {
+        row["campaign_id"]: {
+            "accepted": row["accepted"],
+            "contacted_customers": row["contacted_customers"],
+            "delivered": row["delivered"],
+            "cost": round(row["cost"], 2),
+        }
+        for row in rows
+    }
 
 
 # ---------------------------------------------------------------------------
