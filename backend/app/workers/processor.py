@@ -28,11 +28,12 @@ from app.db.database import (
 from app.integrations.termii import get_balance
 from app.services.campaigns import run_welcome_pipeline
 from app.services.ingestion import read_latest, read_registrations
+from app.services.reporting import active_feature_kinds
 from app.services.sms import SmsDispatcher
 
 
 def enabled_features() -> set[str]:
-    return settings.ENABLED_FEATURES & {WELCOME, INACTIVE}
+    return active_feature_kinds()
 
 
 def _build_inactive_message(user: InactiveUser) -> str:

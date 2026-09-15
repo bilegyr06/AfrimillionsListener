@@ -30,6 +30,7 @@ from app.db.database import (
 from app.integrations.termii import aclose_client, get_balance
 from app.services.campaigns import close_campaign, start_campaign
 from app.services.ingestion import persist_upload
+from app.services.reporting import active_feature_kinds, active_sms_kinds, decorate_campaign
 from app.services.settings import (
     apply_persisted_settings,
     list_operator_settings,
@@ -53,6 +54,22 @@ class CampaignStartRequest(BaseModel):
 class SettingsUpdateRequest(BaseModel):
     key: str = Field(..., description="Setting key from the settings registry")
     value: str = Field(..., description="New value as a string")
+
+
+def _report_sms_block(sms: dict, today_sms: dict) -> dict:
+    """Shape a stats summary for the SMS traffic section of an active report."""
+    return {
+        "total": sms["total"],
+        "sent": sms["sent"],
+        "delivered": sms["delivered"],
+        "failed": sms["failed"],
+        "dnd": sms["dnd"],
+        "rejected": sms["rejected"],
+        "expired": sms["expired"],
+        "deferred": sms["deferred"],
+        "total_cost": sms["total_cost"],
+        "today": today_sms["total"],
+    }
 
 
 def _check_if_within_time_range() -> bool:
@@ -218,7 +235,8 @@ def stats(
     since: str | None = Query(None, description="Start date YYYY-MM-DD"),
     until: str | None = Query(None, description="End date YYYY-MM-DD"),
 ):
-    return get_stats_summary(since=since, until=until)
+    """Active aggregate: enabled feature kinds plus manual operator sends."""
+    return get_stats_summary(kinds=active_sms_kinds(), since=since, until=until)
 
 
 @app.get("/stats/welcome")
@@ -270,18 +288,35 @@ async def stats_sync():
 
 @app.get("/campaign/current")
 def campaign_current():
-    """The active campaign and its dashboard numbers, or active: false."""
+    """The active Welcome campaign and its dashboard numbers, or active: false.
+
+    Campaigns are Welcome-specific; when the Welcome feature is disabled there
+    is no active campaign to present as dashboard data.
+    """
+    if WELCOME not in active_feature_kinds():
+        return {"active": False}
     campaign = get_active_campaign()
     if campaign is None:
         return {"active": False}
-    return {"active": True, "campaign": campaign, "stats": get_campaign_stats(campaign["id"])}
+    return {
+        "active": True,
+        "campaign": decorate_campaign(campaign),
+        "stats": get_campaign_stats(campaign["id"]),
+    }
 
 
 @app.get("/campaigns")
 def campaigns(limit: int = Query(50, ge=1, le=1000)):
-    """Campaign list (newest first) with per-campaign dashboard numbers."""
+    """Campaign history (newest first) with per-campaign dashboard numbers.
+
+    Campaigns are Welcome-specific and remain queryable regardless of the
+    current feature enablement; every entry carries its feature tag.
+    """
     return [
-        {"campaign": c, "stats": get_campaign_stats(c["id"])}
+        {
+            "campaign": decorate_campaign(c),
+            "stats": get_campaign_stats(c["id"]),
+        }
         for c in list_campaigns(limit)
     ]
 
@@ -307,34 +342,45 @@ def campaign_close():
 
 @app.get("/report/overview")
 def report_overview():
-    """High-level business numbers: SMS traffic, the active campaign, files,
-    and wallet balance."""
-    sms = get_stats_summary()
-    today = datetime.now(timezone.utc).date().isoformat()
-    today_sms = get_stats_summary(since=today)
+    """High-level business numbers scoped to the currently enabled features:
+    SMS traffic, the active Welcome campaign, files, and wallet balance.
 
-    active = get_active_campaign()
+    Historical records of disabled features are excluded from the active
+    aggregates here; they remain queryable through the feature-specific
+    endpoints (/stats/welcome, /stats/inactive, /sms/logs?kind=...).
+    """
+    enabled = active_feature_kinds()
+    active_kinds = active_sms_kinds()
+
+    sms = get_stats_summary(kinds=active_kinds)
+    today = datetime.now(timezone.utc).date().isoformat()
+    today_sms = get_stats_summary(kinds=active_kinds, since=today)
+
+    active = get_active_campaign() if WELCOME in enabled else None
     campaigns = list_campaigns(100)
+
+    features_breakdown = {
+        kind: _report_sms_block(
+            get_stats_summary(kind=kind),
+            get_stats_summary(kind=kind, since=today),
+        )
+        for kind in sorted(enabled)
+    }
 
     files = list_files(100)
 
     return {
-        "phone_sms": {
-            "total": sms["total"],
-            "sent": sms["sent"],
-            "delivered": sms["delivered"],
-            "failed": sms["failed"],
-            "dnd": sms["dnd"],
-            "rejected": sms["rejected"],
-            "expired": sms["expired"],
-            "deferred": sms["deferred"],
-            "total_cost": sms["total_cost"],
-            "today": today_sms["total"],
+        "phone_sms": _report_sms_block(sms, today_sms),
+        "features": {
+            "enabled_features": sorted(enabled),
+            "active_kinds": sorted(active_kinds),
+            "breakdown": features_breakdown,
         },
         "campaign": {
             "active": active is not None,
             "total_campaigns": len(campaigns),
             "current": get_campaign_stats(active["id"]) if active else None,
+            "feature": WELCOME,
         },
         "files": {
             "total": len(files),
@@ -347,10 +393,14 @@ def report_overview():
 
 @app.get("/campaign/{campaign_id}")
 def campaign_detail(campaign_id: int):
-    """A campaign with its stored configuration snapshot (parsed) and stats."""
+    """A campaign with its stored configuration snapshot (parsed) and stats.
+
+    Campaign history stays queryable when Welcome is disabled; the feature tag
+    identifies these records as Welcome campaign data."""
     campaign = get_campaign(campaign_id)
     if campaign is None:
         return JSONResponse({"message": "Campaign not found."}, status_code=404)
+    campaign = decorate_campaign(campaign)
     campaign["config"] = json.loads(campaign["config"]) if campaign.get("config") else None
     return {"campaign": campaign, "stats": get_campaign_stats(campaign_id)}
 
@@ -386,10 +436,19 @@ def sms_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=1000),
 ):
-    """Persisted SMS attempts, newest first, with page metadata."""
-    total = count_sms_logs(kind=kind, since=since, until=until)
+    """Persisted SMS attempts, newest first, with page metadata.
+
+    With no `kind` this is the active SMS activity view: records of the
+    currently enabled features plus manual operator sends. An explicit `kind`
+    keeps historical/feature-specific inspection available regardless of
+    enablement. `enabled_features` is the backend's authoritative scope, so
+    the frontend never derives it itself.
+    """
+    kinds = None if kind else active_sms_kinds()
+    total = count_sms_logs(kind=kind, kinds=kinds, since=since, until=until)
     items = get_sms_logs(
-        kind=kind, since=since, until=until, limit=page_size, offset=(page - 1) * page_size
+        kind=kind, kinds=kinds, since=since, until=until,
+        limit=page_size, offset=(page - 1) * page_size,
     )
     return {
         "items": items,
@@ -397,6 +456,7 @@ def sms_logs(
         "page": page,
         "page_size": page_size,
         "pages": -(-total // page_size) if total else 0,
+        "enabled_features": sorted(active_feature_kinds()),
     }
 
 

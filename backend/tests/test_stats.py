@@ -373,7 +373,9 @@ class TestStatsAPI:
                   "status": "failed", "cost": 0, "cycle_id": "c1", "sent_at": now})
         log_wallet_snapshot(500.0, "NGN")
 
-    def test_stats_overall(self, client):
+    def test_stats_overall(self, client, monkeypatch):
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "ENABLED_FEATURES", {"welcome", "inactive"})
         self._seed_data()
         r = client.get("/stats")
         assert r.status_code == 200
