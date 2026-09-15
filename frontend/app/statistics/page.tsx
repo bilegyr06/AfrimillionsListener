@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import StatusPill from "@/components/status-pill";
+import CampaignReport from "@/components/statistics/campaign-report";
+import { CampaignSelect } from "@/components/statistics/campaign-select";
 import StatSection from "@/components/statistics/section";
 import {
   StatusFilter,
@@ -18,15 +20,32 @@ import {
   formatNumber,
   formatPercent,
 } from "@/lib/format";
-import type { CampaignStatisticsSummary } from "@/lib/types";
+import type { CampaignStatisticsDetail, CampaignStatisticsSummary } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
 
 export default function StatisticsPage() {
   const [status, setStatus] = useState<CampaignStatusFilter>("all");
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const campaigns = useQuery<CampaignStatisticsSummary[]>(
     () => apiGet("/stats/campaigns", { limit: 200 }),
     [],
+    30000,
+  );
+
+  // Default to the current campaign when one is active, otherwise the most
+  // recent (the backend serves summaries newest-first).
+  useEffect(() => {
+    if (selectedId != null) return;
+    const list = campaigns.data ?? [];
+    if (list.length === 0) return;
+    const preferred = list.find((c) => c.status === "active") ?? list[0];
+    setSelectedId(preferred.campaign_id);
+  }, [campaigns.data, selectedId]);
+
+  const detail = useQuery<CampaignStatisticsDetail | null>(
+    () => (selectedId != null ? apiGet(`/stats/campaigns/${selectedId}`) : Promise.resolve(null)),
+    [selectedId],
     30000,
   );
 
@@ -48,7 +67,49 @@ export default function StatisticsPage() {
       </div>
 
       <StatSection
-        title="Campaign performance"
+        title="Campaign report"
+        aside={
+          <CampaignSelect
+            campaigns={campaigns.data ?? []}
+            value={selectedId}
+            onChange={setSelectedId}
+            disabled={campaigns.loading && !campaigns.data}
+          />
+        }
+      >
+        {campaigns.loading && !campaigns.data ? (
+          <div className="section-body">
+            <Loading text="Loading campaign statistics\u2026" />
+          </div>
+        ) : campaigns.error ? (
+          <div className="section-body">
+            <ErrorBlock
+              message="We couldn't load campaign statistics."
+              onRetry={campaigns.reload}
+            />
+          </div>
+        ) : selectedId == null ? (
+          <div className="section-body">
+            <Empty text="No campaign statistics yet." />
+          </div>
+        ) : detail.loading && !detail.data ? (
+          <div className="section-body">
+            <Loading text="Loading campaign report\u2026" />
+          </div>
+        ) : detail.error || !detail.data ? (
+          <div className="section-body">
+            <ErrorBlock
+              message="We couldn't load this campaign's report."
+              onRetry={detail.reload}
+            />
+          </div>
+        ) : (
+          <CampaignReport detail={detail.data} />
+        )}
+      </StatSection>
+
+      <StatSection
+        title="All campaigns"
         aside={<StatusFilter value={status} onChange={setStatus} />}
       >
         {campaigns.loading && !campaigns.data ? (
@@ -85,7 +146,7 @@ export default function StatisticsPage() {
             </thead>
             <tbody>
               {rows.map((c) => {
-                const status = campaignStatusPresentation(c.status);
+                const presentation = campaignStatusPresentation(c.status);
                 return (
                   <tr
                     key={c.campaign_id}
@@ -97,7 +158,7 @@ export default function StatisticsPage() {
                       </Link>
                     </td>
                     <td>
-                      <StatusPill {...status} />
+                      <StatusPill {...presentation} />
                     </td>
                     <td className="small muted">
                       {formatDate(c.started_at)}

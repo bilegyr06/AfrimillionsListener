@@ -159,16 +159,15 @@ export function buildCampaignSnapshot(campaign: Campaign, stats: CampaignStats):
 }
 
 const BUCKET_LABELS: Array<[string, string]> = [
-  ["lt_15m", "Under 15 minutes"],
-  ["15m_to_1h", "15 minutes \u2013 1 hour"],
+  ["lt_1h", "Under 1 hour"],
   ["1h_to_6h", "1 \u2013 6 hours"],
-  ["6h_to_24h", "6 \u2013 24 hours"],
-  ["24h_to_48h", "24 \u2013 48 hours"],
-  ["ge_48h", "48 hours or more"],
+  ["6h_to_12h", "6 \u2013 12 hours"],
+  ["12h_to_24h", "12 \u2013 24 hours"],
+  ["ge_24h", "24 hours or more"],
 ];
 
 export function buildStatisticsSnapshot(detail: CampaignStatisticsDetail): string {
-  const { campaign, window, audience, sms, response, economics } = detail;
+  const { campaign, window, audience, funnel, sms, response, economics } = detail;
   const lines: string[] = [];
 
   lines.push("AFRIMILLIONS LISTENER \u2014 CAMPAIGN STATISTICS REPORT");
@@ -180,6 +179,19 @@ export function buildStatisticsSnapshot(detail: CampaignStatisticsDetail): strin
     `Period: ${formatDate(campaign.started_at)} \u2192 ${campaign.ended_at ? formatDate(campaign.ended_at) : "present"}`,
   );
   lines.push(`Attribution window: ${window.description}`);
+  lines.push("");
+
+  heading(lines, "Campaign funnel");
+  lines.push(`  Opportunities (logins)       ${formatNumber(funnel.opportunities)}`);
+  lines.push(`  Unique customers             ${formatNumber(funnel.unique_customers)}`);
+  lines.push(`  Accepted (SMS sent)          ${formatNumber(funnel.accepted)}`);
+  lines.push(`  Delivered                    ${formatNumber(funnel.delivered)}`);
+  lines.push(`  Converted customers          ${formatNumber(funnel.converted_customers)}`);
+  lines.push("");
+  lines.push(
+    "Stages move from logins to distinct customers to accepted sends to delivery",
+  );
+  lines.push("outcomes to conversions; a customer can appear in several stages.");
   lines.push("");
 
   heading(lines, "Audience");
@@ -203,6 +215,7 @@ export function buildStatisticsSnapshot(detail: CampaignStatisticsDetail): strin
   lines.push(`  Rejected                    ${formatNumber(sms.rejected)}`);
   lines.push(`  Blocked (DND)               ${formatNumber(sms.dnd)}`);
   lines.push(`  Expired                     ${formatNumber(sms.expired)}`);
+  lines.push(`  Deferred (no provider call) ${formatNumber(sms.deferred)}`);
   lines.push(`  Awaiting delivery           ${formatNumber(sms.sent_awaiting_delivery)}`);
   lines.push(`  Unmatched to delivery log   ${formatNumber(sms.unmatched)}`);
   lines.push(`  Delivery rate               ${formatPercent(sms.delivery_rate)}`);
@@ -229,9 +242,11 @@ export function buildStatisticsSnapshot(detail: CampaignStatisticsDetail): strin
   }
   lines.push("");
 
-  heading(lines, "Economics");
+  heading(lines, "Campaign cost");
   lines.push(`  SMS cost                    ${formatMoney(economics.sms_cost)}`);
   lines.push(`  Avg cost per accepted SMS   ${formatMoney(economics.avg_cost_per_accepted)}`);
+  lines.push(`  Cost per contacted customer ${formatMoney(economics.cost_per_contacted)}`);
+  lines.push(`  Cost per conversion         ${formatMoney(economics.cost_per_conversion)}`);
   lines.push("");
 
   lines.push(
@@ -239,5 +254,6 @@ export function buildStatisticsSnapshot(detail: CampaignStatisticsDetail): strin
   );
   lines.push("Welcome SMS); 0% is a valid result. Conversion events are each customer's first");
   lines.push("qualifying play \u2014 game-level and repeat-play statistics need play persistence.");
+  lines.push("A \u2014 marks a rate with no base to divide by, not a zero result.");
   return lines.join("\n");
 }

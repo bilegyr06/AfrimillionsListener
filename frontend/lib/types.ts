@@ -262,10 +262,11 @@ export interface CampaignSmsPerformance {
   rejected: number;
   expired: number;
   dnd: number;
+  deferred: number;
   sent_awaiting_delivery: number;
-  delivery_rate: number;
+  delivery_rate: number | null;
   cost: number;
-  avg_cost_per_accepted: number;
+  avg_cost_per_accepted: number | null;
 }
 
 export interface ResponseTiming {
@@ -279,13 +280,7 @@ export interface ResponseTiming {
 }
 
 // Time-to-first-play buckets; keys match the backend's fixed bucket names.
-export type ResponseBucketKey =
-  | "lt_15m"
-  | "15m_to_1h"
-  | "1h_to_6h"
-  | "6h_to_24h"
-  | "24h_to_48h"
-  | "ge_48h";
+export type ResponseBucketKey = "lt_1h" | "1h_to_6h" | "6h_to_12h" | "12h_to_24h" | "ge_24h";
 
 export interface CampaignResponsePerformance {
   accepted_sms: number;
@@ -311,13 +306,28 @@ export interface CampaignWindow {
 
 export interface CampaignEconomics {
   sms_cost: number;
-  avg_cost_per_accepted: number;
+  avg_cost_per_accepted: number | null;
+  cost_per_contacted: number | null;
+  cost_per_conversion: number | null;
+}
+
+// The conceptual conversion funnel. Stages are heterogeneous by design: they
+// move from opportunities (logins) to distinct customers, then accepted sends,
+// then delivery outcomes, then converted customers - so stages are not strict
+// 1:1 drops over one population.
+export interface CampaignFunnel {
+  opportunities: number;
+  unique_customers: number;
+  accepted: number;
+  delivered: number;
+  converted_customers: number;
 }
 
 export interface CampaignStatisticsDetail {
   campaign: Campaign;
   window: CampaignWindow;
   audience: CampaignAudience;
+  funnel: CampaignFunnel;
   sms: CampaignSmsPerformance;
   response: CampaignResponsePerformance;
   economics: CampaignEconomics;
@@ -338,6 +348,7 @@ export interface CampaignStatisticsSummary {
     accepted: number;
     contacted_customers: number;
     delivered: number;
+    deferred: number;
     cost: number;
   };
   response: {
@@ -345,5 +356,9 @@ export interface CampaignStatisticsSummary {
     conversion_rate: number;
     avg_response_seconds: number | null;
     still_pending: number;
+  };
+  economics: {
+    cost_per_contacted: number | null;
+    cost_per_conversion: number | null;
   };
 }
