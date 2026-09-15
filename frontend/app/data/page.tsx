@@ -6,7 +6,7 @@ import StatusPill from "@/components/status-pill";
 import { Empty, ErrorBlock, Loading } from "@/components/state-ui";
 import { apiGet, apiPostForm } from "@/lib/api";
 import { fileStatusPresentation, formatDateTime, formatNumber } from "@/lib/format";
-import type { FilesResponse, SettingsResponse, UploadResponse } from "@/lib/types";
+import type { FilesResponse, ReportOverview, SettingsResponse, UploadResponse } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
 
 export default function DataPage() {
@@ -16,14 +16,13 @@ export default function DataPage() {
 
   const files = useQuery<FilesResponse>(() => apiGet("/files"), [], 20000);
   const settings = useQuery<SettingsResponse>(() => apiGet("/settings"), []);
+  const overview = useQuery<ReportOverview>(() => apiGet("/report/overview"), [], 30000);
 
-  const enabledFeatures = settings.data?.items.find((s) => s.key === "ENABLED_FEATURES")?.value ?? "";
   const scraperEnabled = settings.data?.items.find((s) => s.key === "CSV_DOWNLOADER_ENABLED")?.value === "true";
   const featureLabels: Record<string, string> = { welcome: "Welcome SMS", inactive: "Inactivity SMS" };
-  const features = enabledFeatures
-    .split(",")
-    .map((f) => f.trim())
-    .filter(Boolean);
+  // Active features come from the backend's scoped report, not from parsing
+  // the ENABLED_FEATURES setting, so the UI can never drift from the scope.
+  const features = overview.data?.features.enabled_features ?? [];
 
   async function handleUpload() {
     if (!file) return;

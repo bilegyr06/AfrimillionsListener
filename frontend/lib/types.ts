@@ -57,6 +57,9 @@ export interface Campaign {
   status: "active" | "closed" | string;
   created_at: string;
   config?: Record<string, string> | null;
+  // Backend tags campaign records with the feature they belong to (welcome).
+  // Optional so the UI still renders against an older backend.
+  feature?: string;
 }
 
 export interface WalletSnapshot {
@@ -79,12 +82,22 @@ export interface UploadedFile {
   processed_at: string | null;
 }
 
+// The backend is the single source of truth for which features are active.
+// The UI renders this scope; it never derives it from settings or env.
+export interface FeaturesScope {
+  enabled_features: string[];
+  active_kinds: string[];
+  breakdown: Record<string, SmsSummary>;
+}
+
 export interface ReportOverview {
   phone_sms: SmsSummary;
+  features: FeaturesScope;
   campaign: {
     active: boolean;
     total_campaigns: number;
     current: CampaignStats | null;
+    feature?: string;
   };
   files: {
     total: number;
@@ -148,6 +161,12 @@ export interface Paged<T> {
   page: number;
   page_size: number;
   pages: number;
+}
+
+// The default /sms/logs response carries the backend's active feature scope
+// so the UI can derive the kind filter from a single source.
+export interface SmsLogsResponse extends Paged<SmsLogEntry> {
+  enabled_features: string[];
 }
 
 // ---------------------------------------------------------------------------

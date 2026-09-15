@@ -1,20 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Pager from "@/components/pager";
 import StatusPill from "@/components/status-pill";
 import { Empty, ErrorBlock, Loading } from "@/components/state-ui";
 import { apiGet } from "@/lib/api";
 import { formatDateTime, formatMoney, formatNumber, smsKindLabel, smsStatusPresentation } from "@/lib/format";
-import type { Paged, SmsLogEntry } from "@/lib/types";
+import type { SmsLogsResponse } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
-
-const KIND_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "All types" },
-  { value: "welcome", label: "Welcome" },
-  { value: "inactive", label: "Inactive" },
-  { value: "manual", label: "Manual" },
-];
 
 export default function SmsPage() {
   const [page, setPage] = useState(1);
@@ -22,11 +15,33 @@ export default function SmsPage() {
   const [since, setSince] = useState("");
   const [until, setUntil] = useState("");
 
-  const logs = useQuery<Paged<SmsLogEntry>>(
+  const logs = useQuery<SmsLogsResponse>(
     () => apiGet("/sms/logs", { page, page_size: 50, kind, since, until }),
     [page, kind, since, until],
     15000,
   );
+
+  // Build the kind filter from the backend's active scope so the UI never
+  // re-derives which features are enabled.  Manual always appears because it
+  // is an operator action, not a feature toggle.
+  const enabledFeatures = logs.data?.enabled_features;
+  const kindOptions = useMemo(
+    () => [
+      { value: "", label: "All types" },
+      ...(enabledFeatures ?? []).map((f) => ({ value: f, label: smsKindLabel(f) })),
+      { value: "manual", label: smsKindLabel("manual") },
+    ],
+    [enabledFeatures],
+  );
+
+  // If a previously-selected kind is no longer offered (feature toggled off),
+  // clear the filter rather than leaving a stale selection in the dropdown.
+  useEffect(() => {
+    if (kind && !kindOptions.some((o) => o.value === kind)) {
+      setKind("");
+      setPage(1);
+    }
+  }, [kind, kindOptions]);
 
   return (
     <div className="page">
@@ -44,7 +59,7 @@ export default function SmsPage() {
           <label>
             Type
             <select value={kind} onChange={(e) => { setKind(e.target.value); setPage(1); }}>
-              {KIND_OPTIONS.map((opt) => (
+              {kindOptions.map((opt) => (
                 <option key={opt.value} value={opt.value}>
                   {opt.label}
                 </option>
