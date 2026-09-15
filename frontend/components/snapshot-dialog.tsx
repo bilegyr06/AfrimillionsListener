@@ -13,12 +13,32 @@ interface Props {
 export default function SnapshotDialog({ open, title, text, filename, onClose }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+
+  function legacyCopyText(value: string): boolean {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = value;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
 
   useEffect(() => {
     const el = dialogRef.current;
     if (!el) return;
     if (open) {
       setCopied(false);
+      setCopyFailed(false);
       if (!el.open) el.showModal();
     } else {
       if (el.open) el.close();
@@ -26,18 +46,28 @@ export default function SnapshotDialog({ open, title, text, filename, onClose }:
   }, [open]);
 
   useEffect(() => {
-    if (!copied) return;
-    const id = setTimeout(() => setCopied(false), 2000);
+    if (!copied && !copyFailed) return;
+    const id = setTimeout(() => {
+      setCopied(false);
+      setCopyFailed(false);
+    }, 3500);
     return () => clearTimeout(id);
-  }, [copied]);
+  }, [copied, copyFailed]);
 
   async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-    } catch {
-      setCopied(false);
+    let ok = false;
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } catch {
+        ok = legacyCopyText(text);
+      }
+    } else {
+      ok = legacyCopyText(text);
     }
+    setCopied(ok);
+    setCopyFailed(!ok);
   }
 
   function handleDownload() {
@@ -72,6 +102,12 @@ export default function SnapshotDialog({ open, title, text, filename, onClose }:
       </div>
       <div className="dialog-foot">
         {copied && <span className="snapshot-copied">Copied to clipboard</span>}
+        {copyFailed && (
+          <span className="snapshot-copy-failed">
+            Browser blocked copying — select the text and press Ctrl+C, or
+            download the .txt.
+          </span>
+        )}
         <button className="btn btn-secondary btn-sm" onClick={handleDownload}>
           Download .txt
         </button>

@@ -543,6 +543,15 @@ h3 { font-size: 15px; font-weight: 600; margin: 0; }
   font-weight: 500;
 }
 
+.snapshot-copy-failed {
+  align-self: center;
+  margin-right: auto;
+  max-width: 320px;
+  font-size: 13px;
+  color: var(--err);
+  line-height: 1.4;
+}
+
 .dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
 
 .dialog-head { padding: 16px 20px 0; }
