@@ -12,7 +12,12 @@ import {
   formatPercent,
   smsKindLabel,
 } from "@/lib/format";
-import type { Campaign, CampaignStats, ReportOverview } from "@/lib/types";
+import type {
+  Campaign,
+  CampaignStats,
+  CampaignStatisticsDetail,
+  ReportOverview,
+} from "@/lib/types";
 
 const FEATURE_LABELS: Record<string, string> = {
   welcome: "Welcome SMS",
@@ -150,5 +155,89 @@ export function buildCampaignSnapshot(campaign: Campaign, stats: CampaignStats):
     "Conversion rate is the share of SMS-recipient responders; customers who were not sent to",
   );
   lines.push("are excluded from the rate but listed above.");
+  return lines.join("\n");
+}
+
+const BUCKET_LABELS: Array<[string, string]> = [
+  ["lt_15m", "Under 15 minutes"],
+  ["15m_to_1h", "15 minutes \u2013 1 hour"],
+  ["1h_to_6h", "1 \u2013 6 hours"],
+  ["6h_to_24h", "6 \u2013 24 hours"],
+  ["24h_to_48h", "24 \u2013 48 hours"],
+  ["ge_48h", "48 hours or more"],
+];
+
+export function buildStatisticsSnapshot(detail: CampaignStatisticsDetail): string {
+  const { campaign, window, audience, sms, response, economics } = detail;
+  const lines: string[] = [];
+
+  lines.push("AFRIMILLIONS LISTENER \u2014 CAMPAIGN STATISTICS REPORT");
+  lines.push(`Generated ${formatDateTime(new Date().toISOString())}.`);
+  lines.push("");
+  lines.push(`Campaign: ${campaignDisplayName(campaign.name, campaign.id)}`);
+  lines.push(`Status: ${campaign.status === "active" ? "Active" : "Closed"}`);
+  lines.push(
+    `Period: ${formatDate(campaign.started_at)} \u2192 ${campaign.ended_at ? formatDate(campaign.ended_at) : "present"}`,
+  );
+  lines.push(`Attribution window: ${window.description}`);
+  lines.push("");
+
+  heading(lines, "Audience");
+  lines.push(`  Opportunities (logins)      ${formatNumber(audience.opportunities)}`);
+  lines.push(`  Unique customers            ${formatNumber(audience.unique_customers)}`);
+  lines.push(`  Pending evaluation          ${formatNumber(audience.pending_evaluation)}`);
+  lines.push("  Not sent to:");
+  lines.push(`    Removed \u2014 played early     ${formatNumber(audience.not_sent_to.disqualified_played)}`);
+  lines.push(`    Skipped \u2014 limit reached     ${formatNumber(audience.not_sent_to.skipped_cap)}`);
+  lines.push(`    Skipped \u2014 cooldown active   ${formatNumber(audience.not_sent_to.skipped_cooldown)}`);
+  lines.push(`    Skipped \u2014 no valid phone    ${formatNumber(audience.not_sent_to.skipped_invalid_phone)}`);
+  lines.push(`    SMS failed to send          ${formatNumber(audience.not_sent_to.failed_send)}`);
+  lines.push(`    Expired with campaign       ${formatNumber(audience.not_sent_to.expired)}`);
+  lines.push("");
+
+  heading(lines, "SMS performance");
+  lines.push(`  Accepted (sent)             ${formatNumber(sms.accepted)}`);
+  lines.push(`  Customers contacted         ${formatNumber(sms.contacted_customers)}`);
+  lines.push(`  Delivered                   ${formatNumber(sms.delivered)}`);
+  lines.push(`  Failed                      ${formatNumber(sms.failed)}`);
+  lines.push(`  Rejected                    ${formatNumber(sms.rejected)}`);
+  lines.push(`  Blocked (DND)               ${formatNumber(sms.dnd)}`);
+  lines.push(`  Expired                     ${formatNumber(sms.expired)}`);
+  lines.push(`  Awaiting delivery           ${formatNumber(sms.sent_awaiting_delivery)}`);
+  lines.push(`  Unmatched to delivery log   ${formatNumber(sms.unmatched)}`);
+  lines.push(`  Delivery rate               ${formatPercent(sms.delivery_rate)}`);
+  lines.push(`  SMS cost                    ${formatMoney(sms.cost)}`);
+  lines.push(`  Avg cost per accepted SMS   ${formatMoney(sms.avg_cost_per_accepted)}`);
+  lines.push("");
+
+  heading(lines, "Player response");
+  lines.push(`  Converted customers         ${formatNumber(response.converted_customers)}`);
+  lines.push(`  Conversion rate             ${formatPercent(response.conversion_rate)}`);
+  lines.push(`  Conversion events           ${formatNumber(response.conversion_events)}`);
+  lines.push(`  Customers not converted     ${formatNumber(response.not_converted_customers)}`);
+  lines.push(`  Still awaiting response     ${formatNumber(response.pending_outcome)}`);
+  lines.push(
+    `  First qualifying play       ${response.first_qualifying_play_at ? formatDateTime(response.first_qualifying_play_at) : "\u2014"}`,
+  );
+  lines.push(`  Avg time to first play      ${formatDuration(response.time_to_first_play.avg)}`);
+  lines.push(`  Median time to first play   ${formatDuration(response.time_to_first_play.median)}`);
+  lines.push(`  P25 / P75                   ${formatDuration(response.time_to_first_play.p25)} / ${formatDuration(response.time_to_first_play.p75)}`);
+  lines.push("");
+  lines.push("  Time to first qualifying play:");
+  for (const [key, label] of BUCKET_LABELS) {
+    lines.push(`    ${label.padEnd(22)} ${formatNumber(response.buckets[key as keyof typeof response.buckets] ?? 0)}`);
+  }
+  lines.push("");
+
+  heading(lines, "Economics");
+  lines.push(`  SMS cost                    ${formatMoney(economics.sms_cost)}`);
+  lines.push(`  Avg cost per accepted SMS   ${formatMoney(economics.avg_cost_per_accepted)}`);
+  lines.push("");
+
+  lines.push(
+    "Conversion rate is converted customers divided by customers contacted (accepted",
+  );
+  lines.push("Welcome SMS); 0% is a valid result. Conversion events are each customer's first");
+  lines.push("qualifying play \u2014 game-level and repeat-play statistics need play persistence.");
   return lines.join("\n");
 }

@@ -224,3 +224,126 @@ export interface CloseCampaignResult {
 export interface HealthResponse {
   status: string;
 }
+
+// ---------------------------------------------------------------------------
+// Statistics (campaign reporting surface)
+// ---------------------------------------------------------------------------
+
+// Aggregated campaign statistics served by /stats/campaigns and
+// /stats/campaigns/{id}. Field shapes mirror app.services.statistics, which is
+// the single source of truth for the report contract.
+
+export interface CampaignAudienceStatus {
+  rows: number;
+  users: number;
+}
+
+export interface CampaignAudience {
+  opportunities: number;
+  unique_customers: number;
+  pending_evaluation: number;
+  not_sent_to: {
+    disqualified_played: number;
+    skipped_cap: number;
+    skipped_cooldown: number;
+    skipped_invalid_phone: number;
+    failed_send: number;
+    expired: number;
+  };
+  statuses: Record<string, CampaignAudienceStatus>;
+}
+
+export interface CampaignSmsPerformance {
+  accepted: number;
+  contacted_customers: number;
+  unmatched: number;
+  delivered: number;
+  failed: number;
+  rejected: number;
+  expired: number;
+  dnd: number;
+  sent_awaiting_delivery: number;
+  delivery_rate: number;
+  cost: number;
+  avg_cost_per_accepted: number;
+}
+
+export interface ResponseTiming {
+  count: number;
+  avg: number | null;
+  median: number | null;
+  p25: number | null;
+  p75: number | null;
+  min: number | null;
+  max: number | null;
+}
+
+// Time-to-first-play buckets; keys match the backend's fixed bucket names.
+export type ResponseBucketKey =
+  | "lt_15m"
+  | "15m_to_1h"
+  | "1h_to_6h"
+  | "6h_to_24h"
+  | "24h_to_48h"
+  | "ge_48h";
+
+export interface CampaignResponsePerformance {
+  accepted_sms: number;
+  contacted_customers: number;
+  converted_customers: number;
+  conversion_events: number;
+  not_converted_customers: number;
+  conversion_rate: number;
+  pending_outcome: number;
+  first_qualifying_play_at: string | null;
+  time_to_first_play: ResponseTiming;
+  buckets: Record<ResponseBucketKey, number>;
+  qualifying_plays: number | null;
+  qualifying_plays_note: string;
+}
+
+export interface CampaignWindow {
+  started_at: string;
+  ended_at: string | null;
+  attribution_end: string | null;
+  description: string;
+}
+
+export interface CampaignEconomics {
+  sms_cost: number;
+  avg_cost_per_accepted: number;
+}
+
+export interface CampaignStatisticsDetail {
+  campaign: Campaign;
+  window: CampaignWindow;
+  audience: CampaignAudience;
+  sms: CampaignSmsPerformance;
+  response: CampaignResponsePerformance;
+  economics: CampaignEconomics;
+}
+
+export interface CampaignStatisticsSummary {
+  campaign_id: number;
+  name: string | null;
+  status: string;
+  feature: string;
+  started_at: string;
+  ended_at: string | null;
+  audience: {
+    opportunities: number;
+    unique_customers: number;
+  };
+  sms: {
+    accepted: number;
+    contacted_customers: number;
+    delivered: number;
+    cost: number;
+  };
+  response: {
+    converted_customers: number;
+    conversion_rate: number;
+    avg_response_seconds: number | null;
+    still_pending: number;
+  };
+}
