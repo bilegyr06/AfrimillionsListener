@@ -1,13 +1,15 @@
-"""Tests for the campaign statistics reporting contract.
+"""Tests for the campaign statistics reporting contract (Phase 1).
 
 The Statistics surface (/stats/campaigns, /stats/campaigns/{id}) must always
 aggregate only in SQL and stick to the stable terminology in
 app.services.statistics: opportunities (logins) vs unique customers vs
-accepted vs contacted vs converted, with 0 as a valid rate.
+accepted vs contacted vs converted, with 0 as a valid rate but None for rates
+whose denominator is zero (zero vs unavailable).
 """
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -30,24 +32,39 @@ from app.db.database import (
 from app.main import app
 from app.services.statistics import campaign_statistics, campaign_summaries
 
+CAMP_START = "2026-01-01T00:00:00+00:00"
+CAMP_END = "2026-01-05T00:00:00+00:00"
 SENT_AT = "2026-01-02T08:00:00+00:00"
 LOGIN_AT = "2026-01-02T07:00:00+00:00"
 
+EMPTY_BUCKETS = {
+    "lt_1h": 0,
+    "1h_to_6h": 0,
+    "6h_to_12h": 0,
+    "12h_to_24h": 0,
+    "ge_24h": 0,
+}
 
-def _start_campaign() -> dict:
+
+def _start_campaign(closed: bool = False) -> dict:
     result = create_campaign("Statistics test")
     campaign = result["campaign"]
     conn = get_connection()
     conn.execute(
-        "UPDATE welcome_campaigns SET started_at = ? WHERE id = ?",
-        ("2026-01-01T00:00:00+00:00", campaign["id"]),
+        "UPDATE welcome_campaigns SET started_at = ?, ended_at = ?, status = ? WHERE id = ?",
+        (
+            CAMP_START,
+            CAMP_END if closed else None,
+            "closed" if closed else "active",
+            campaign["id"],
+        ),
     )
     conn.commit()
     conn.close()
     return campaign
 
 
-def _seed_opportunity(campaign_id: int, user_id: str, status: str) -> dict:
+def _seed_opportunity(campaign_id: int, user_id: str, status: str, login_at: str = LOGIN_AT) -> dict:
     upsert_opportunities([
         {
             "campaign_id": campaign_id,
@@ -55,15 +72,15 @@ def _seed_opportunity(campaign_id: int, user_id: str, status: str) -> dict:
             "first_name": "Ada",
             "phone_raw": "08012345678",
             "phone_normalized": "2348012345678",
-            "login_at": LOGIN_AT,
+            "login_at": login_at,
             "eval_delay_hours": 1,
         }
     ])
     conn = get_connection()
     row = conn.execute(
         "SELECT id, login_at FROM welcome_opportunities "
-        "WHERE campaign_id = ? AND user_id = ?",
-        (campaign_id, user_id),
+        "WHERE campaign_id = ? AND user_id = ? AND login_at = ?",
+        (campaign_id, user_id, login_at),
     ).fetchone()
     conn.close()
     if status != "created":
@@ -71,8 +88,8 @@ def _seed_opportunity(campaign_id: int, user_id: str, status: str) -> dict:
     return {"id": row["id"], "login_at": row["login_at"]}
 
 
-def _seed_intervention(campaign_id: int, user_id: str, message_id: str) -> int:
-    opp = _seed_opportunity(campaign_id, user_id, "sent")
+def _seed_intervention(campaign_id: int, user_id: str, message_id: str, login_at: str = LOGIN_AT) -> int:
+    opp = _seed_opportunity(campaign_id, user_id, "sent", login_at)
     return create_intervention(
         opportunity_id=opp["id"],
         campaign_id=campaign_id,
@@ -97,6 +114,26 @@ def _seed_delivery(message_id: str, user_id: str, status: str, cost: float):
     })
 
 
+def _respond(campaign_id: int, message_id: str, seconds: float):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT id FROM welcome_interventions WHERE message_id = ?", (message_id,)
+    ).fetchone()
+    conn.close()
+    play_at = (datetime.fromisoformat(SENT_AT) + timedelta(seconds=seconds)).isoformat()
+    record_intervention_response(row["id"], play_at, seconds)
+
+
+def _set_intervention_status(campaign_id: int, message_id: str, status: str):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE welcome_interventions SET status = ? WHERE message_id = ?",
+        (status, message_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def _active_campaign_with_results() -> dict:
     """Campaign with accepted sends in every response state plus drops.
 
@@ -110,42 +147,18 @@ def _active_campaign_with_results() -> dict:
     _seed_intervention(campaign["id"], "u3", "m_3")
     _seed_intervention(campaign["id"], "u4", "m_4")
 
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT i.id, i.user_id FROM welcome_interventions i "
-        "WHERE i.campaign_id = ? AND i.user_id IN ('u1', 'u2', 'u3')",
-        (campaign["id"],),
-    ).fetchall()
-    for row in rows:
-        if row["user_id"] == "u3":
-            conn.execute(
-                "UPDATE welcome_interventions SET status = 'no_response', updated_at = ? "
-                "WHERE id = ?",
-                ("2026-01-03T00:00:00+00:00", row["id"]),
-            )
-    conn.commit()
-    conn.close()
+    _set_intervention_status(campaign["id"], "m_3", "no_response")
 
-    # u1 -> 10 minutes after send; u2 -> 2 hours after send.
-    conn = get_connection()
-    for user_id, seconds, play_at in (
-        ("u1", 600, "2026-01-02T08:10:00+00:00"),
-        ("u2", 7200, "2026-01-02T10:00:00+00:00"),
-    ):
-        row = conn.execute(
-            "SELECT id FROM welcome_interventions WHERE campaign_id = ? AND user_id = ?",
-            (campaign["id"], user_id),
-        ).fetchone()
-        record_intervention_response(row["id"], play_at, seconds)
-    conn.close()
+    _respond(campaign["id"], "m_1", 600)
+    _respond(campaign["id"], "m_2", 7200)
 
-    for user_id in ("u5", "u6", "u7", "u8"):
-        _seed_opportunity(campaign["id"], user_id, {
-            "u5": "disqualified_played",
-            "u6": "skipped_cap",
-            "u7": "skipped_invalid_phone",
-            "u8": "failed_send",
-        }[user_id])
+    for user_id, status in {
+        "u5": "disqualified_played",
+        "u6": "skipped_cap",
+        "u7": "skipped_invalid_phone",
+        "u8": "failed_send",
+    }.items():
+        _seed_opportunity(campaign["id"], user_id, status)
     # u9 stays 'created' (pending evaluation); u10 expires with the campaign.
     _seed_opportunity(campaign["id"], "u9", "created")
     _seed_opportunity(campaign["id"], "u10", "expired")
@@ -182,6 +195,16 @@ class TestCampaignStatisticsService:
             "expired": 1,
         }
 
+    def test_detail_funnel(self, stats_fixture):
+        funnel = campaign_statistics(stats_fixture["campaign"]["id"])["funnel"]
+        assert funnel == {
+            "opportunities": 10,
+            "unique_customers": 10,
+            "accepted": 4,
+            "delivered": 3,
+            "converted_customers": 2,
+        }
+
     def test_detail_sms_funnel(self, stats_fixture):
         sms = campaign_statistics(stats_fixture["campaign"]["id"])["sms"]
         assert sms["accepted"] == 4
@@ -189,8 +212,9 @@ class TestCampaignStatisticsService:
         assert sms["delivered"] == 3
         assert sms["sent_awaiting_delivery"] == 1
         assert sms["unmatched"] == 0
+        assert sms["deferred"] == 0
         assert sms["failed"] == sms["rejected"] == sms["dnd"] == sms["expired"] == 0
-        assert sms["delivery_rate"] == 0.75
+        assert sms["delivery_rate"] == pytest.approx(0.75)
         assert sms["cost"] == pytest.approx(3.6)
         assert sms["avg_cost_per_accepted"] == pytest.approx(0.9)
 
@@ -214,14 +238,20 @@ class TestCampaignStatisticsService:
             "max": pytest.approx(7200.0),
         }
         assert response["buckets"] == {
-            "lt_15m": 1,
-            "15m_to_1h": 0,
+            **EMPTY_BUCKETS,
+            "lt_1h": 1,
             "1h_to_6h": 1,
-            "6h_to_24h": 0,
-            "24h_to_48h": 0,
-            "ge_48h": 0,
         }
         assert response["qualifying_plays"] is None
+
+    def test_detail_economics(self, stats_fixture):
+        economics = campaign_statistics(stats_fixture["campaign"]["id"])["economics"]
+        assert economics == {
+            "sms_cost": pytest.approx(3.6),
+            "avg_cost_per_accepted": pytest.approx(0.9),
+            "cost_per_contacted": pytest.approx(0.9),
+            "cost_per_conversion": pytest.approx(1.8),
+        }
 
     def test_unknown_campaign_is_none(self, stats_fixture):
         assert campaign_statistics(99999) is None
@@ -232,7 +262,12 @@ class TestCampaignStatisticsService:
         assert report["audience"]["opportunities"] == 0
         assert report["response"]["contacted_customers"] == 0
         assert report["response"]["conversion_rate"] == 0.0
-        assert report["sms"]["delivery_rate"] == 0.0
+        assert report["response"]["buckets"] == EMPTY_BUCKETS
+        # Rates with a zero denominator are unavailable, not misleading zeros.
+        assert report["sms"]["delivery_rate"] is None
+        assert report["sms"]["avg_cost_per_accepted"] is None
+        assert report["economics"]["cost_per_contacted"] is None
+        assert report["economics"]["cost_per_conversion"] is None
 
     def test_summaries_newest_first_and_aggregated(self, stats_fixture, _init_db):
         empty = create_campaign("Empty")["campaign"]
@@ -248,12 +283,183 @@ class TestCampaignStatisticsService:
             "accepted": 4,
             "contacted_customers": 4,
             "delivered": 3,
+            "deferred": 0,
             "cost": pytest.approx(3.6),
         }
         assert row["response"]["converted_customers"] == 2
         assert row["response"]["conversion_rate"] == pytest.approx(0.5)
         assert row["response"]["avg_response_seconds"] == pytest.approx(3900.0)
         assert row["response"]["still_pending"] == 1
+        assert row["economics"] == {
+            "cost_per_contacted": pytest.approx(0.9),
+            "cost_per_conversion": pytest.approx(1.8),
+        }
+
+
+class TestOpportunityVsCustomerCounting:
+    def test_multiple_opportunities_one_customer(self, _init_db):
+        campaign = _start_campaign()
+        # Two accepted sends for the same customer from two separate logins.
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_intervention(campaign["id"], "u1", "m_2", login_at="2026-01-02T09:30:00+00:00")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+        _seed_delivery("m_2", "u1", "delivered", 0.9)
+        _respond(campaign["id"], "m_1", 600)
+
+        report = campaign_statistics(campaign["id"])
+        assert report["audience"]["opportunities"] == 2
+        assert report["audience"]["unique_customers"] == 1
+        assert report["funnel"]["accepted"] == 2
+        assert report["sms"]["delivered"] == 2
+        assert report["response"]["contacted_customers"] == 1
+        assert report["response"]["converted_customers"] == 1
+        assert report["response"]["conversion_events"] == 1
+        assert report["response"]["conversion_rate"] == pytest.approx(1.0)
+
+    def test_opportunities_and_customers_differ(self, _init_db):
+        campaign = _start_campaign()
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_intervention(campaign["id"], "u1", "m_2", login_at="2026-01-02T09:30:00+00:00")
+        _seed_opportunity(campaign["id"], "u2", "disqualified_played")
+
+        report = campaign_statistics(campaign["id"])
+        assert report["audience"]["opportunities"] == 3
+        assert report["audience"]["unique_customers"] == 2
+
+
+class TestSmsStatusBreakdown:
+    def test_deferred_status_counted(self, _init_db):
+        campaign = _start_campaign()
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_delivery("m_1", "u1", "deferred", 0.0)
+
+        sms = campaign_statistics(campaign["id"])["sms"]
+        assert sms["deferred"] == 1
+        assert sms["delivered"] == 0
+        # All delivery outcomes must sum to accepted sends.
+        outcomes = (
+            sms["delivered"] + sms["failed"] + sms["rejected"] + sms["dnd"]
+            + sms["expired"] + sms["deferred"] + sms["sent_awaiting_delivery"]
+        )
+        assert outcomes == sms["accepted"]
+
+    def test_full_status_breakdown(self, _init_db):
+        campaign = _start_campaign()
+        for user, (mid, status) in {
+            "u1": ("m_1", "delivered"),
+            "u2": ("m_2", "failed"),
+            "u3": ("m_3", "rejected"),
+            "u4": ("m_4", "dnd"),
+            "u5": ("m_5", "expired"),
+            "u6": ("m_6", "deferred"),
+            "u7": ("m_7", "sent"),
+        }.items():
+            _seed_intervention(campaign["id"], user, mid)
+            _seed_delivery(mid, user, status, 0.9)
+
+        sms = campaign_statistics(campaign["id"])["sms"]
+        assert sms["accepted"] == 7
+        assert sms["delivered"] == 1
+        assert sms["failed"] == 1
+        assert sms["rejected"] == 1
+        assert sms["dnd"] == 1
+        assert sms["expired"] == 1
+        assert sms["deferred"] == 1
+        assert sms["sent_awaiting_delivery"] == 1
+
+
+class TestResponseTimeCalculations:
+    def test_odd_sample_median(self, _init_db):
+        campaign = _start_campaign()
+        for user, mid, seconds in (
+            ("u1", "m_1", 600),       # 10 min
+            ("u2", "m_2", 7200),      # 2 h
+            ("u3", "m_3", 90000),     # 25 h
+        ):
+            _seed_intervention(campaign["id"], user, mid)
+            _seed_delivery(mid, user, "delivered", 0.9)
+            _respond(campaign["id"], mid, seconds)
+
+        timing = campaign_statistics(campaign["id"])["response"]["time_to_first_play"]
+        assert timing["count"] == 3
+        assert timing["median"] == pytest.approx(7200.0)
+        assert timing["avg"] == pytest.approx((600 + 7200 + 90000) / 3)
+        assert timing["min"] == pytest.approx(600.0)
+        assert timing["max"] == pytest.approx(90000.0)
+
+        buckets = campaign_statistics(campaign["id"])["response"]["buckets"]
+        assert buckets == {
+            "lt_1h": 1,
+            "1h_to_6h": 1,
+            "6h_to_12h": 0,
+            "12h_to_24h": 0,
+            "ge_24h": 1,
+        }
+
+    def test_response_seconds_boundaries(self, _init_db):
+        # Boundary semantics: a value exactly on a bucket's lower edge rolls up
+        # into that bucket (1 h -> 1h_to_6h, 12 h -> 12h_to_24h, 24 h -> ge_24h).
+        campaign = _start_campaign()
+        boundaries = {
+            "m_a": (3599, "lt_1h"),       # just under 1 h
+            "m_b": (3600, "1h_to_6h"),    # exactly 1 h
+            "m_c": (23400, "6h_to_12h"),  # 6.5 h
+            "m_d": (43200, "12h_to_24h"), # exactly 12 h
+            "m_e": (86400, "ge_24h"),     # exactly 24 h
+        }
+        for user, (mid, (seconds, bucket)) in enumerate(boundaries.items(), start=1):
+            _seed_intervention(campaign["id"], f"u{user}", mid)
+            _seed_delivery(mid, f"u{user}", "delivered", 0.9)
+            _respond(campaign["id"], mid, seconds)
+
+        buckets = campaign_statistics(campaign["id"])["response"]["buckets"]
+        for bucket in EMPTY_BUCKETS:
+            assert buckets[bucket] == 1, bucket
+
+
+class TestCampaignStates:
+    def test_campaign_with_no_sms(self, _init_db):
+        campaign = _start_campaign()
+        _seed_opportunity(campaign["id"], "u1", "created")
+
+        report = campaign_statistics(campaign["id"])
+        assert report["audience"]["opportunities"] == 1
+        assert report["sms"]["accepted"] == 0
+        assert report["response"]["contacted_customers"] == 0
+        assert report["response"]["conversion_rate"] == 0.0
+        assert report["sms"]["delivery_rate"] is None
+        assert report["economics"]["cost_per_contacted"] is None
+        assert report["economics"]["cost_per_conversion"] is None
+
+    def test_campaign_with_sms_but_zero_conversions(self, _init_db):
+        campaign = _start_campaign()
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_delivery("m_1", "u1", "delivered", 1.2)
+
+        report = campaign_statistics(campaign["id"])
+        assert report["response"]["contacted_customers"] == 1
+        assert report["response"]["converted_customers"] == 0
+        assert report["response"]["conversion_rate"] == 0.0
+        assert report["economics"]["cost_per_contacted"] == pytest.approx(1.2)
+        assert report["economics"]["cost_per_conversion"] is None
+
+    def test_closed_campaign_reported(self, _init_db):
+        campaign = _start_campaign(closed=True)
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+        _respond(campaign["id"], "m_1", 1800)
+
+        report = campaign_statistics(campaign["id"])
+        assert report["campaign"]["status"] == "closed"
+        assert report["window"]["ended_at"] == CAMP_END
+        assert report["window"]["attribution_end"] == CAMP_END
+        assert report["response"]["converted_customers"] == 1
+
+    def test_active_campaign_reported(self, stats_fixture):
+        report = campaign_statistics(stats_fixture["campaign"]["id"])
+        assert report["campaign"]["status"] == "active"
+        assert report["window"]["ended_at"] is None
+        assert report["window"]["attribution_end"] is None
 
 
 class TestStatisticsEndpoints:
@@ -262,7 +468,10 @@ class TestStatisticsEndpoints:
         result = client.get("/stats/campaigns")
         assert result.status_code == 200
         assert isinstance(result.json(), list)
-        assert result.json()[0]["campaign_id"] == stats_fixture["campaign"]["id"]
+        summary = result.json()[0]
+        assert summary["campaign_id"] == stats_fixture["campaign"]["id"]
+        assert "economics" in summary
+        assert "deferred" in summary["sms"]
 
     def test_detail_endpoint(self, stats_fixture):
         client = TestClient(app)
@@ -271,6 +480,8 @@ class TestStatisticsEndpoints:
         body = result.json()
         assert body["campaign"]["id"] == stats_fixture["campaign"]["id"]
         assert body["response"]["converted_customers"] == 2
+        assert body["funnel"]["accepted"] == 4
+        assert body["economics"]["cost_per_conversion"] == pytest.approx(1.8)
 
     def test_missing_campaign_is_404(self, _init_db):
         client = TestClient(app)
