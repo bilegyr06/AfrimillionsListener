@@ -27,6 +27,7 @@ from app.db.database import (
     list_campaigns,
     list_files,
 )
+from app.services.statistics import campaign_statistics, campaign_summaries
 from app.integrations.termii import aclose_client, get_balance
 from app.services.campaigns import close_campaign, start_campaign
 from app.services.ingestion import persist_upload
@@ -266,6 +267,21 @@ def stats_cycles(
 @app.get("/stats/wallet")
 def stats_wallet():
     return get_wallet_history()
+
+
+@app.get("/stats/campaigns")
+def stats_campaigns(limit: int = Query(50, ge=1, le=1000)):
+    """Campaign statistics summaries, newest first (Statistics surface)."""
+    return campaign_summaries(limit)
+
+
+@app.get("/stats/campaigns/{campaign_id}")
+def stats_campaign_detail(campaign_id: int):
+    """Full statistics report for a single campaign (Statistics surface)."""
+    stats = campaign_statistics(campaign_id)
+    if stats is None:
+        return JSONResponse({"message": "Campaign not found."}, status_code=404)
+    return stats
 
 
 _BALANCE_CACHE_TTL = 12.0  # seconds; shared by all open dashboard tabs so a
