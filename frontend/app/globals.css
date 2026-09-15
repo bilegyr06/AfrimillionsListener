@@ -518,6 +518,31 @@ h3 { font-size: 15px; font-weight: 600; margin: 0; }
   color: var(--text);
 }
 
+.dialog-wide { max-width: 760px; }
+
+.snapshot-pre {
+  margin: 0;
+  max-height: 55vh;
+  overflow: auto;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.snapshot-copied {
+  align-self: center;
+  margin-right: auto;
+  font-size: 13px;
+  color: var(--ok);
+  font-weight: 500;
+}
+
 .dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
 
 .dialog-head { padding: 16px 20px 0; }

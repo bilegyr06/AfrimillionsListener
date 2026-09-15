@@ -11,6 +11,7 @@ import {
 import Notice from "@/components/notice";
 import StatusPill from "@/components/status-pill";
 import { Empty, ErrorBlock, Loading } from "@/components/state-ui";
+import SnapshotDialog from "@/components/snapshot-dialog";
 import { apiGet } from "@/lib/api";
 import {
   campaignDisplayName,
@@ -25,6 +26,7 @@ import {
 } from "@/lib/format";
 import type { CampaignWithStats, Paged, ReportOverview, SmsLogEntry } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
+import { buildOverviewSnapshot, snapshotFilename } from "@/lib/snapshot";
 
 function Stat({ label, value, accent, sub }: { label: string; value: string; accent?: boolean; sub?: string }) {
   return (
@@ -41,6 +43,7 @@ export default function DashboardPage() {
   const [notice, setNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [startOpen, setStartOpen] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
+  const [snapshotOpen, setSnapshotOpen] = useState(false);
   const { busy, start, close } = useCampaignActions();
 
   const overview = useQuery<ReportOverview>(() => apiGet("/report/overview"), [], 30000);
@@ -132,6 +135,9 @@ export default function DashboardPage() {
         <div className="actions">
           <button className="btn btn-secondary" onClick={overview.reload}>
             Refresh
+          </button>
+          <button className="btn btn-secondary" onClick={() => setSnapshotOpen(true)}>
+            Export stats
           </button>
         </div>
       </div>
@@ -277,6 +283,13 @@ export default function DashboardPage() {
 
       <StartCampaignDialog open={startOpen} busy={busy} onConfirm={handleStart} onCancel={() => setStartOpen(false)} />
       <CloseCampaignDialog open={closeOpen} busy={busy} onConfirm={handleClose} onCancel={() => setCloseOpen(false)} />
+      <SnapshotDialog
+        open={snapshotOpen}
+        title="Statistics snapshot"
+        text={data ? buildOverviewSnapshot(data) : ""}
+        filename={snapshotFilename("afrimillions-stats")}
+        onClose={() => setSnapshotOpen(false)}
+      />
     </div>
   );
 }

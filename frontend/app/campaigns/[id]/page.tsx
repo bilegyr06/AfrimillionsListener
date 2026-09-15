@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { CloseCampaignDialog, useCampaignActions } from "@/components/campaign-actions";
+import SnapshotDialog from "@/components/snapshot-dialog";
 import Notice from "@/components/notice";
 import Pager from "@/components/pager";
 import StatusPill from "@/components/status-pill";
@@ -28,6 +29,7 @@ import type {
   SettingsResponse,
 } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
+import { buildCampaignSnapshot, snapshotFilename } from "@/lib/snapshot";
 
 function humanizeKey(key: string): string {
   return key
@@ -51,6 +53,7 @@ export default function CampaignDetailPage() {
 
   const [page, setPage] = useState(1);
   const [closeOpen, setCloseOpen] = useState(false);
+  const [snapshotOpen, setSnapshotOpen] = useState(false);
   const [notice, setNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const { busy, close } = useCampaignActions();
 
@@ -142,6 +145,9 @@ export default function CampaignDetailPage() {
               Close campaign
             </button>
           )}
+          <button className="btn btn-secondary" onClick={() => setSnapshotOpen(true)}>
+            Export report
+          </button>
         </div>
       </div>
 
@@ -323,6 +329,13 @@ export default function CampaignDetailPage() {
       </section>
 
       <CloseCampaignDialog open={closeOpen} busy={busy} onConfirm={handleClose} onCancel={() => setCloseOpen(false)} />
+      <SnapshotDialog
+        open={snapshotOpen}
+        title="Campaign report"
+        text={buildCampaignSnapshot(campaign, stats)}
+        filename={snapshotFilename(`campaign-${campaign.id}`)}
+        onClose={() => setSnapshotOpen(false)}
+      />
     </div>
   );
 }
