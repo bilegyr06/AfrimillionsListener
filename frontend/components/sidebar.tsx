@@ -18,38 +18,40 @@ function NavIcon({ name }: { name: string }) {
   switch (name) {
     case "dashboard":
       return (
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="2" y="2" width="5" height="5" rx="1" />
-          <rect x="9" y="2" width="5" height="5" rx="1" />
-          <rect x="2" y="9" width="5" height="5" rx="1" />
-          <rect x="9" y="9" width="5" height="5" rx="1" />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect width="7" height="9" x="3" y="3" rx="1" />
+          <rect width="7" height="5" x="14" y="3" rx="1" />
+          <rect width="7" height="9" x="14" y="12" rx="1" />
+          <rect width="7" height="5" x="3" y="16" rx="1" />
         </svg>
       );
     case "campaigns":
       return (
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 2v12" />
-          <path d="M3 2h9a1 1 0 011 1v4a1 1 0 01-1 1H7" />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />
+          <path d="M6 14a12 12 0 0 0 2.4 7.2a2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14" />
+          <path d="M8 6v8" />
         </svg>
       );
     case "sms":
       return (
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M13 9.5a6 6 0 01-10.392 3.487L2 14l1.013-2.608A6 6 0 0113 4.5z" />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
         </svg>
       );
     case "data":
       return (
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M8 11V3m0 0L5 6m3-3l3 3" />
-          <path d="M3 11v2a1 1 0 001 1h8a1 1 0 001-1v-2" />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <ellipse cx="12" cy="5" rx="9" ry="3" />
+          <path d="M3 5v14a9 3 0 0 0 18 0V5" />
+          <path d="M3 12a9 3 0 0 0 18 0" />
         </svg>
       );
     case "settings":
       return (
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M6.5 2h3l.3 1.8a5 5 0 011.6 1l1.6-.6 1.5 2.6-1.2 1.3a5 5 0 010 1.4l1.2 1.3-1.5 2.6-1.6-.6a5 5 0 01-1.6 1L9.5 15h-3l-.3-1.8a5 5 0 01-1.6-1l-1.6.6-1.5-2.6 1.2-1.3a5 5 0 010-1.4l-1.2-1.3L3.3 2.7l1.6.6A5 5 0 016.5 2.3z" />
-          <circle cx="8" cy="8.5" r="1.5" />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0a2.34 2.34 0 0 0 3.319 1.915a2.34 2.34 0 0 1 2.33 4.033a2.34 2.34 0 0 0 0 3.831a2.34 2.34 0 0 1-2.33 4.033a2.34 2.34 0 0 0-3.319 1.915a2.34 2.34 0 0 1-4.659 0a2.34 2.34 0 0 0-3.32-1.915a2.34 2.34 0 0 1-2.33-4.033a2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />
+          <circle cx="12" cy="12" r="3" />
         </svg>
       );
     default:
