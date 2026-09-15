@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Notice from "@/components/notice";
 import StatusPill from "@/components/status-pill";
 import { Empty, ErrorBlock, Loading } from "@/components/state-ui";
@@ -10,7 +10,7 @@ import type { FilesResponse, ReportOverview, SettingsResponse, UploadResponse } 
 import { useQuery } from "@/lib/use-query";
 
 export default function DataPage() {
-  const [file, setFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [notice, setNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
@@ -24,13 +24,12 @@ export default function DataPage() {
   // the ENABLED_FEATURES setting, so the UI can never drift from the scope.
   const features = overview.data?.features.enabled_features ?? [];
 
-  async function handleUpload() {
-    if (!file) return;
+  async function handleUpload(picked: File) {
     setUploading(true);
     setNotice(null);
     try {
       const form = new FormData();
-      form.append("file", file);
+      form.append("file", picked);
       const result = await apiPostForm<UploadResponse>("/files", form);
       const labels: Record<string, string> = {
         invitations: "Invitations",
@@ -42,13 +41,18 @@ export default function DataPage() {
         kind: "success",
         text: `${result.message} Dataset ${labels[result.record.dataset] ?? result.record.dataset}${rows != null ? ` \u00b7 ${formatNumber(rows)} rows` : ""}. It becomes visible to the next cycle.`,
       });
-      setFile(null);
       files.reload();
     } catch (err) {
       setNotice({ kind: "error", text: err instanceof Error ? err.message : "Upload failed. Is the file a valid CSV?" });
     } finally {
       setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  }
+
+  function handlePickChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const picked = e.target.files?.[0];
+    if (picked) void handleUpload(picked);
   }
 
   const failedCount = files.data?.items.filter((f) => f.status === "failed").length ?? 0;
@@ -101,11 +105,17 @@ export default function DataPage() {
         <div className="section-body">
           <div className="upload-area">
             <input
+              ref={fileInputRef}
               type="file"
               accept=".csv,text/csv"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="hidden-input"
+              onChange={handlePickChange}
             />
-            <button className="btn btn-primary" disabled={!file || uploading} onClick={handleUpload}>
+            <button
+              className="btn btn-primary"
+              disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}
+            >
               {uploading ? "Uploading\u2026" : "Upload CSV"}
             </button>
           </div>
