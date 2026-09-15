@@ -376,6 +376,51 @@ h3 { font-size: 15px; font-weight: 600; margin: 0; }
   border-bottom: 1px solid var(--border);
 }
 
+/* Settings rows */
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.setting-row:last-child { border-bottom: none; }
+
+.setting-info { flex: 1; min-width: 0; }
+.setting-label { font-size: 14px; font-weight: 500; }
+.setting-control { flex: 0 0 auto; min-width: 0; }
+.setting-save { flex: 0 0 auto; }
+
+.setting-control input[type="text"],
+.setting-control input[type="number"],
+.setting-control input[type="time"],
+.setting-control textarea {
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.setting-control textarea { min-height: 84px; padding: 10px; resize: vertical; }
+
+.setting-control input:focus,
+.setting-control textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+@media (max-width: 760px) {
+  .setting-row { flex-direction: column; align-items: stretch; }
+  .setting-control { width: 100%; }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Forms                                                                       */
 /* -------------------------------------------------------------------------- */
