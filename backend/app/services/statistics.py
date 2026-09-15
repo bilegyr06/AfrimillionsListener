@@ -16,10 +16,16 @@ Terminology is strict and stable:
   conversion_events     responded interventions. Each is a customer's *first*
                         qualifying play; repeated plays are not stored yet, so
                         this is not a total play count.
-  conversion_rate       converted_customers / contacted_customers (0.0 valid)
+  conversion_rate       converted customers / contacted customers (0.0 valid)
+  cost_per_contacted    total SMS cost / distinct contacted customers
+  cost_per_conversion   total SMS cost / distinct converted customers
   qualifying_plays      every customer play inside the attribution window.
                         Requires play-level persistence (Phase 2); reported as
                         None for now.
+
+Money/rate convention: a rate or unit cost whose denominator is zero is
+reported as None ("unavailable"), never as a misleading 0.0. Plain counts such
+as converted_customers and conversion_rate genuinely are zero and report 0.
 """
 from __future__ import annotations
 
@@ -47,15 +53,14 @@ _NOT_SENT_STATUSES = (
     "expired",
 )
 
-#: Time-to-first-play distribution buckets, in seconds. Bucket boundaries use
-#: the campaign convention (< 15 min, < 1 h, < 6 h, < 24 h, < 48 h, else).
+#: Time-to-first-play distribution buckets, in seconds. Boundaries follow the
+#: reporting contract: under 1 h, 1-6 h, 6-12 h, 12-24 h, 24 h or more.
 _RESPONSE_BUCKETS = (
-    ("lt_15m", lambda s: s < 15 * 60),
-    ("15m_to_1h", lambda s: 15 * 60 <= s < 60 * 60),
+    ("lt_1h", lambda s: s < 60 * 60),
     ("1h_to_6h", lambda s: 60 * 60 <= s < 6 * 60 * 60),
-    ("6h_to_24h", lambda s: 6 * 60 * 60 <= s < 24 * 60 * 60),
-    ("24h_to_48h", lambda s: 24 * 60 * 60 <= s < 48 * 60 * 60),
-    ("ge_48h", lambda s: s >= 48 * 60 * 60),
+    ("6h_to_12h", lambda s: 6 * 60 * 60 <= s < 12 * 60 * 60),
+    ("12h_to_24h", lambda s: 12 * 60 * 60 <= s < 24 * 60 * 60),
+    ("ge_24h", lambda s: s >= 24 * 60 * 60),
 )
 
 
@@ -133,8 +138,10 @@ def campaign_statistics(campaign_id: int) -> dict | None:
     contacted = interventions["contacted_customers"]
     converted = interventions["converted_customers"]
     rate = round(converted / contacted, 4) if contacted else 0.0
-    delivery_rate = round(funnel["delivered"] / funnel["accepted"], 4) if funnel["accepted"] else 0.0
-    avg_cost = round(funnel["cost"] / funnel["accepted"], 2) if funnel["accepted"] else 0.0
+    delivery_rate = round(funnel["delivered"] / funnel["accepted"], 4) if funnel["accepted"] else None
+    avg_cost = round(funnel["cost"] / funnel["accepted"], 2) if funnel["accepted"] else None
+    cost_per_contacted = round(funnel["cost"] / contacted, 2) if contacted else None
+    cost_per_conversion = round(funnel["cost"] / converted, 2) if converted else None
 
     statuses = audience["statuses"]
     not_sent_to = {
@@ -168,6 +175,18 @@ def campaign_statistics(campaign_id: int) -> dict | None:
             "not_sent_to": not_sent_to,
             "statuses": statuses,
         },
+        # The conceptual funnel. Stages are deliberately heterogeneous: the
+        # funnel starts from opportunities (login events), narrows to distinct
+        # customers, then to accepted SESSION sends (interventions), then to
+        # delivery outcomes, then to distinct converted customers. A customer
+        # can appear at more than one stage, so these are NOT strict 1:1 drops.
+        "funnel": {
+            "opportunities": audience["opportunities"],
+            "unique_customers": audience["unique_customers"],
+            "accepted": funnel["accepted"],
+            "delivered": funnel["delivered"],
+            "converted_customers": interventions["converted_customers"],
+        },
         "sms": {
             "accepted": funnel["accepted"],
             "contacted_customers": funnel["contacted_customers"],
@@ -177,6 +196,7 @@ def campaign_statistics(campaign_id: int) -> dict | None:
             "rejected": funnel["rejected"],
             "expired": funnel["expired"],
             "dnd": funnel["dnd"],
+            "deferred": funnel["deferred"],
             "sent_awaiting_delivery": funnel["sent"],
             "delivery_rate": delivery_rate,
             "cost": round(funnel["cost"], 2),
@@ -207,6 +227,8 @@ def campaign_statistics(campaign_id: int) -> dict | None:
         "economics": {
             "sms_cost": round(funnel["cost"], 2),
             "avg_cost_per_accepted": avg_cost,
+            "cost_per_contacted": cost_per_contacted,
+            "cost_per_conversion": cost_per_conversion,
         },
     }
 
@@ -239,11 +261,12 @@ def campaign_summaries(limit: int = 50) -> list[dict]:
         )
         funnel = funnel_map.get(
             campaign_id,
-            {"accepted": 0, "contacted_customers": 0, "delivered": 0, "cost": 0},
+            {"accepted": 0, "contacted_customers": 0, "delivered": 0, "deferred": 0, "cost": 0},
         )
         contacted = interventions["contacted_customers"]
         converted = interventions["converted_customers"]
         rate = round(converted / contacted, 4) if contacted else 0.0
+        cost = round(funnel["cost"], 2)
         summaries.append(
             {
                 "campaign_id": campaign_id,
@@ -260,13 +283,18 @@ def campaign_summaries(limit: int = 50) -> list[dict]:
                     "accepted": funnel["accepted"],
                     "contacted_customers": interventions["contacted_customers"],
                     "delivered": funnel["delivered"],
-                    "cost": funnel["cost"],
+                    "deferred": funnel["deferred"],
+                    "cost": cost,
                 },
                 "response": {
                     "converted_customers": converted,
                     "conversion_rate": rate,
                     "avg_response_seconds": interventions["avg_response_seconds"],
                     "still_pending": interventions["still_open"],
+                },
+                "economics": {
+                    "cost_per_contacted": round(cost / contacted, 2) if contacted else None,
+                    "cost_per_conversion": round(cost / converted, 2) if converted else None,
                 },
             }
         )

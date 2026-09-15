@@ -784,6 +784,7 @@ def get_campaign_sms_funnel(campaign_id: int) -> dict:
             COALESCE(SUM(CASE WHEN s.status = 'rejected' THEN 1 ELSE 0 END), 0) AS rejected,
             COALESCE(SUM(CASE WHEN s.status = 'expired' THEN 1 ELSE 0 END), 0) AS expired,
             COALESCE(SUM(CASE WHEN s.status = 'dnd' THEN 1 ELSE 0 END), 0) AS dnd,
+            COALESCE(SUM(CASE WHEN s.status = 'deferred' THEN 1 ELSE 0 END), 0) AS deferred,
             COALESCE(SUM(CASE WHEN s.status = 'sent' THEN 1 ELSE 0 END), 0) AS sent,
             COALESCE(SUM(s.cost), 0) AS cost
         FROM welcome_interventions i
@@ -892,6 +893,7 @@ def get_campaigns_sms_funnel() -> dict[int, dict]:
                COUNT(*) AS accepted,
                COUNT(DISTINCT i.user_id) AS contacted_customers,
                COALESCE(SUM(CASE WHEN s.status = 'delivered' THEN 1 ELSE 0 END), 0) AS delivered,
+               COALESCE(SUM(CASE WHEN s.status = 'deferred' THEN 1 ELSE 0 END), 0) AS deferred,
                COALESCE(SUM(s.cost), 0) AS cost
         FROM welcome_interventions i
         LEFT JOIN sms_log s ON s.message_id = i.message_id
@@ -904,6 +906,7 @@ def get_campaigns_sms_funnel() -> dict[int, dict]:
             "accepted": row["accepted"],
             "contacted_customers": row["contacted_customers"],
             "delivered": row["delivered"],
+            "deferred": row["deferred"],
             "cost": round(row["cost"], 2),
         }
         for row in rows
