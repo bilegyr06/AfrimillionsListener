@@ -1,5 +1,6 @@
 import asyncio
 import glob
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,18 +12,24 @@ from app.config import settings
 from app.database import (
     add_pending,
     clear_pending,
+    close_open_interventions,
+    create_intervention,
+    get_active_campaign,
     get_all_notified,
-    get_open_welcome_tracking,
+    get_campaign,
+    get_cap_usage,
+    get_last_welcome_sent,
+    get_open_interventions,
+    get_open_opportunities,
     get_pending,
-    get_welcome_sent,
-    get_welcome_sms_state,
-    ingest_welcome_analytics,
     log_sms_batch,
     log_wallet_snapshot,
+    mark_opportunities_expired,
+    record_intervention_response,
     reset_user,
-    update_welcome_play,
+    update_opportunity_status,
     upsert_notified_records,
-    upsert_welcome_sent,
+    upsert_opportunities,
 )
 from app.messager import send_sms
 from app.models import InactiveUser
@@ -38,10 +45,6 @@ def enabled_features() -> set[str]:
 
 def _build_inactive_message(user: InactiveUser) -> str:
     return settings.INACTIVE_MESSAGE.format(first_name=user.first_name)
-
-
-def _build_welcome_message(user: InactiveUser) -> str:
-    return settings.WELCOME_MESSAGE.format(first_name=user.first_name)
 
 
 def _normalize_phone(raw) -> str | None:
@@ -70,6 +73,69 @@ def _load_csv(pattern: str) -> pd.DataFrame:
         return pd.DataFrame()
     newest = sorted(files, key=lambda p: Path(p).stat().st_mtime, reverse=True)[0]
     return pd.read_csv(newest, parse_dates=["timestamp"])
+
+
+def _load_regs() -> pd.DataFrame:
+    """Read the newest Registrations file without parse_dates.
+
+    Registration exports contain mixed timestamp formats (with and without
+    microseconds) that crash pandas' automatic datetime parsing, and the
+    timestamp is not needed here anyway.
+    """
+    files = glob.glob(str(settings.DATA_FOLDER / settings.REGISTRATION_FILE_PATTERN))
+    if not files:
+        return pd.DataFrame()
+    newest = sorted(files, key=lambda p: Path(p).stat().st_mtime, reverse=True)[0]
+    return pd.read_csv(newest)
+
+
+def _load_login_events() -> pd.DataFrame:
+    """Concatenate login events from ALL Login files, not just the newest.
+
+    A Login export is only a point-in-time slice of recent sign-ins, so the
+    active campaign must scan every file that overlaps its window.
+    """
+    files = glob.glob(str(settings.DATA_FOLDER / settings.LOGIN_FILE_PATTERN))
+    frames: list[pd.DataFrame] = []
+    for f in files:
+        try:
+            df = pd.read_csv(f, parse_dates=["timestamp"], dtype={"userId": str})
+        except (ValueError, pd.errors.ParserError):
+            continue
+        if df.empty or "userId" not in df.columns or "timestamp" not in df.columns:
+            continue
+        frames.append(df[["userId", "timestamp"]].copy())
+    if not frames:
+        return pd.DataFrame(columns=["userId", "timestamp"])
+    merged = pd.concat(frames, ignore_index=True)
+    return merged[merged["userId"].notna()]
+
+
+def _is_valid_nigerian_phone(normalized: str | None) -> bool:
+    """Hard safety gate: only validated Nigerian mobile numbers pass.
+
+    Expects a normalized number (leading '234', no '+'). A Nigerian mobile is
+    '234' + 3-digit leading network code starting 7/8/9 + 7 more digits.
+    """
+    if not normalized:
+        return False
+    return re.fullmatch(r"234[789]\d{9}", normalized) is not None
+
+
+def _phone_gate(raw) -> str | None:
+    """Normalize a stored phone and return it ONLY if it is a valid Nigerian
+    mobile. Invalid numbers return None and are marked skipped_invalid_phone."""
+    return _normalize_phone(raw) if _is_valid_nigerian_phone(_normalize_phone(raw)) else None
+
+
+def _to_utc_series(series: pd.Series) -> pd.Series:
+    """Treat naive CSV timestamps as UTC (app-wide convention) and return aware."""
+    parsed = pd.to_datetime(series)
+    if parsed.dt.tz is None:
+        parsed = parsed.dt.tz_localize("UTC")
+    else:
+        parsed = parsed.dt.tz_convert("UTC")
+    return parsed
 
 
 def reset_active_users(logins_df: pd.DataFrame):
@@ -154,156 +220,329 @@ def find_inactive_users(logins_df: pd.DataFrame | None = None) -> list[InactiveU
     return results
 
 
-def find_recent_login_users(
-    logins_df: pd.DataFrame | None = None,
-    sales_df: pd.DataFrame | None = None,
-) -> list[InactiveUser]:
-    """Feature 1: post-sign-in welcome campaign.
-
-    A sign-in becomes eligible once WELCOME_EVAL_DELAY_HOURS have elapsed, but
-    only if the user played no game during the wait period. Each sign-in can
-    trigger at most one Welcome SMS (see welcome_sent), subject to the per-user
-    cooldown and the configured Welcome notification cap / post-limit rule.
-    """
-    if logins_df is None:
-        logins_df = _load_csv(settings.LOGIN_FILE_PATTERN)
-    regs_df = _load_csv(settings.REGISTRATION_FILE_PATTERN)
-    if sales_df is None:
-        sales_df = _load_csv(settings.SALES_FILE_PATTERN)
-
-    if logins_df.empty or regs_df.empty or sales_df.empty:
-        print("No login, registration, or sales data available.")
-        return []
-
-    # Join on a common string key so int/str user ids from different sources merge cleanly.
-    logins_df = logins_df.copy()
-    logins_df["userId"] = logins_df["userId"].astype(str)
-    regs_df = regs_df.copy()
-    regs_df["userId"] = regs_df["userId"].astype(str)
-    sales_df = sales_df.copy()
-    sales_df["userId"] = sales_df["userId"].astype(str)
-
-    now_naive = datetime.now()
-    delay = timedelta(hours=settings.WELCOME_EVAL_DELAY_HOURS)
-
-    last_logins = (
-        logins_df.groupby("userId")["timestamp"]
-        .max()
-        .reset_index()
-        .rename(columns={"timestamp": "last_login"})
-    )
-
-    # Only sign-ins whose evaluation delay has elapsed are considered.
-    evaluable = last_logins[last_logins["last_login"] <= now_naive - delay].copy()
-
-    merged = evaluable.merge(
-        regs_df[["userId", "firstName", "phone"]],
-        on="userId",
-        how="left",
-    )
-
-    # Users who played during the wait window (login, login + delay] are
-    # disqualified for that sign-in regardless of anything else.
-    plays = sales_df.rename(columns={"timestamp": "play_at"})
-    joined = merged.merge(plays, on="userId", how="inner", suffixes=("", "_play"))
-    played_in_window = joined[
-        (joined["play_at"] > joined["last_login"])
-        & (joined["play_at"] <= joined["last_login"] + delay)
-    ]
-    played_user_ids = set(played_in_window["userId"].astype(str))
-
-    welcomed = get_welcome_sent()
-    welcome_state = get_welcome_sms_state()
-    now_utc = datetime.now(timezone.utc)
-
-    results: list[InactiveUser] = []
-    for _, row in merged.iterrows():
-        user_id = str(row["userId"])
-        login_at = row["last_login"].isoformat()
-
-        if user_id in played_user_ids:
-            continue
-
-        if user_id in welcomed and welcomed[user_id] == login_at:
-            continue
-
-        record = welcome_state.get(user_id)
-        if record:
-            next_available = datetime.fromisoformat(
-                record["last_sent_at"]
-            ) + timedelta(hours=settings.COOLDOWN_HOURS)
-            if now_utc < next_available:
-                continue
-            if (
-                settings.WELCOME_MAX_MESSAGES > 0
-                and record["count"] >= settings.WELCOME_MAX_MESSAGES
-                and settings.WELCOME_POST_LIMIT_SUPPRESS
-            ):
-                continue
-
-        phone = _normalize_phone(row.get("phone", ""))
-        if phone is None:
-            continue
-
-        results.append(
-            InactiveUser(
-                user_id=user_id,
-                first_name=str(row.get("firstName", "User")),
-                phone=phone,
-                last_login=login_at,
-                is_new=True,
-            )
-        )
-
-    return results
-
-
-def refresh_welcome_tracking(sales_df: pd.DataFrame) -> dict:
-    """Analytics only: link welcomed users to any play in their post-send window.
-
-    Runs each welcome cycle. New sends are captured once from sms_log, then
-    open sends are matched against the latest Sales file within
-    (sent_at, sent_at + WELCOME_POST_TRACK_HOURS]. Nothing tracked here
-    changes sending behaviour.
-    """
-    window_hours = settings.WELCOME_POST_TRACK_HOURS
-    if window_hours <= 0:
-        return {"disabled": True}
-
-    ingest_welcome_analytics(window_hours)
-
-    if sales_df.empty:
-        return {"tracked": 0, "responded": 0, "open": 0}
-
+def _plays_map(sales_df: pd.DataFrame) -> dict[str, list[datetime]]:
+    """Per-user sorted lists of aware play timestamps from the Sales file."""
+    if sales_df is None or sales_df.empty:
+        return {}
     plays = sales_df.copy()
     plays["userId"] = plays["userId"].astype(str)
-    plays["timestamp"] = pd.to_datetime(plays["timestamp"]).dt.tz_localize("UTC")
+    tss = _to_utc_series(plays["timestamp"])
+    out: dict[str, list[datetime]] = {}
+    for uid, ts in zip(plays["userId"], tss):
+        out.setdefault(str(uid), []).append(ts.to_pydatetime())
+    for key in out:
+        out[key].sort()
+    return out
+
+
+def ingest_opportunities(campaign: dict, login_df: pd.DataFrame, regs_df: pd.DataFrame) -> int:
+    """Create one opportunity per login that falls inside the campaign window.
+
+    Snapshot first name, raw phone and the validated normalized phone at
+    ingestion time (from the newest Registrations file) so later changes to
+    either source do not rewrite history. Idempotent via the
+    (campaign_id, user_id, login_at) unique key.
+    """
+    if login_df is None or login_df.empty or regs_df is None or regs_df.empty:
+        return 0
+
+    campaign_start = pd.Timestamp(campaign["started_at"])
+    if campaign_start.tzinfo is None:
+        campaign_start = campaign_start.tz_localize("UTC")
+
+    frame = login_df[login_df["userId"].notna()].copy()
+    frame["userId"] = frame["userId"].astype(str)
+    tss = _to_utc_series(frame["timestamp"])
+
+    mask = tss >= campaign_start
+    if campaign["ended_at"]:
+        campaign_end = pd.Timestamp(campaign["ended_at"])
+        mask = mask & (tss < campaign_end)
+
+    regs = regs_df.copy()
+    regs["userId"] = regs["userId"].astype(str)
+    reg_map = {str(r["userId"]): r for _, r in regs.iterrows()}
+
+    records: list[dict] = []
+    for uid, ts in zip(frame.loc[mask, "userId"], tss[mask]):
+        reg = reg_map.get(str(uid))
+        phone_raw = str(reg["phone"]) if reg is not None and pd.notna(reg.get("phone")) else ""
+        first_name = "User"
+        if reg is not None and pd.notna(reg.get("firstName")):
+            first_name = str(reg["firstName"])
+        records.append({
+            "campaign_id": campaign["id"],
+            "user_id": str(uid),
+            "first_name": first_name,
+            "phone_raw": phone_raw,
+            "phone_normalized": _phone_gate(phone_raw),
+            "login_at": ts.isoformat(),
+            "eval_delay_hours": settings.WELCOME_EVAL_DELAY_HOURS,
+        })
+
+    upsert_opportunities(records)
+    return len(records)
+
+
+async def _evaluate_campaign(
+    campaign: dict,
+    sales_df: pd.DataFrame,
+    deadline: datetime,
+    cycle_id: str,
+) -> dict:
+    opps = get_open_opportunities(campaign["id"])
+    if not opps:
+        return {"eligible": 0, "sent": 0, "failed": 0, "deferred": 0, "decisions": {}}
+
+    plays = _plays_map(sales_df)
     now_utc = datetime.now(timezone.utc)
+    decisions = {
+        status: 0
+        for status in (
+            "too_early",
+            "expired",
+            "disqualified_played",
+            "skipped_cap",
+            "skipped_cooldown",
+            "skipped_invalid_phone",
+        )
+    }
+    eligible: list[dict] = []
 
-    open_rows = get_open_welcome_tracking()
+    for opp in opps:
+        login_at = datetime.fromisoformat(opp["login_at"])
+        due_at = login_at + timedelta(hours=opp["eval_delay_hours"])
+
+        if now_utc < due_at:
+            decisions["too_early"] += 1
+            continue
+
+        if campaign["ended_at"]:
+            end_at = datetime.fromisoformat(campaign["ended_at"])
+            if due_at > end_at:
+                update_opportunity_status(opp["id"], "expired")
+                decisions["expired"] += 1
+                continue
+
+        # Pre-dispatch re-check: any play after the sign-in (including after
+        # the eval delay) disqualifies this login, so we never SMS someone who
+        # already played.
+        played_after = [p for p in plays.get(opp["user_id"], []) if login_at < p <= now_utc]
+        if played_after:
+            update_opportunity_status(opp["id"], "disqualified_played")
+            decisions["disqualified_played"] += 1
+            continue
+
+        # Cap counts successful sends (interventions), cumulative across campaigns.
+        if (
+            settings.WELCOME_MAX_MESSAGES > 0
+            and get_cap_usage(opp["user_id"]) >= settings.WELCOME_MAX_MESSAGES
+            and settings.WELCOME_POST_LIMIT_SUPPRESS
+        ):
+            update_opportunity_status(opp["id"], "skipped_cap")
+            decisions["skipped_cap"] += 1
+            continue
+
+        # Cooldown is measured from the last successful send.
+        if settings.COOLDOWN_HOURS > 0:
+            last_sent = get_last_welcome_sent(opp["user_id"])
+            if last_sent:
+                last_dt = datetime.fromisoformat(last_sent)
+                if now_utc < last_dt + timedelta(hours=settings.COOLDOWN_HOURS):
+                    update_opportunity_status(opp["id"], "skipped_cooldown")
+                    decisions["skipped_cooldown"] += 1
+                    continue
+
+        if not opp["phone_normalized"]:
+            update_opportunity_status(opp["id"], "skipped_invalid_phone")
+            decisions["skipped_invalid_phone"] += 1
+            continue
+
+        eligible.append(opp)
+
+    if not eligible:
+        return {"eligible": 0, "sent": 0, "failed": 0, "deferred": 0, "decisions": decisions}
+
+    result = await _send_opportunities(eligible, deadline, cycle_id, campaign)
+    result["decisions"] = decisions
+    return result
+
+
+async def _send_opportunities(
+    opps: list[dict],
+    deadline: datetime,
+    cycle_id: str,
+    campaign: dict,
+) -> dict:
+    """Send Welcome SMS for evaluated opportunities.
+
+    Only validated phones reach send_sms (the safety gate already ran). A
+    Termii success creates one intervention (consuming a cap slot) and marks
+    the opportunity 'sent'; a failure marks it 'failed_send' with no cap
+    consumption. If the cycle deadline/cancel hits, leftover opportunities stay
+    'created' and are re-evaluated on the next run.
+    """
+    sem = asyncio.Semaphore(settings.MAX_CONCURRENCY)
+    sent = failed = deferred = 0
+    sms_records: list[dict] = []
+
+    i = 0
+    while i < len(opps):
+        if state.cancel_requested or datetime.now() >= deadline:
+            deferred += len(opps) - i
+            break
+
+        batch = opps[i : i + settings.MAX_CONCURRENCY]
+        i += len(batch)
+
+        async def worker(opp: dict):
+            if state.cancel_requested or datetime.now() >= deadline:
+                return ("deferred", opp)
+            async with sem:
+                if state.cancel_requested or datetime.now() >= deadline:
+                    return ("deferred", opp)
+                message = settings.WELCOME_MESSAGE.format(first_name=opp["first_name"] or "User")
+                return ("attempted", opp, await send_sms(opp["phone_normalized"], message))
+
+        for outcome in await asyncio.gather(*[worker(o) for o in batch]):
+            if outcome[0] == "deferred":
+                deferred += 1
+                continue
+            _, opp, result = outcome
+            sent_at = datetime.now(timezone.utc).isoformat()
+            if result:
+                sent += 1
+                sms_records.append({
+                    "message_id": result.get("message_id"),
+                    "user_id": opp["user_id"],
+                    "kind": WELCOME,
+                    "phone": opp["phone_normalized"],
+                    "status": "sent",
+                    "cost": 0,
+                    "balance_after": result.get("balance"),
+                    "cycle_id": cycle_id,
+                    "sent_at": sent_at,
+                })
+                create_intervention(
+                    opportunity_id=opp["id"],
+                    campaign_id=campaign["id"],
+                    user_id=opp["user_id"],
+                    login_at=opp["login_at"],
+                    sent_at=sent_at,
+                    message_id=result.get("message_id"),
+                )
+                update_opportunity_status(opp["id"], "sent")
+            else:
+                failed += 1
+                sms_records.append({
+                    "user_id": opp["user_id"],
+                    "kind": WELCOME,
+                    "phone": opp["phone_normalized"],
+                    "status": "failed",
+                    "cost": 0,
+                    "cycle_id": cycle_id,
+                    "sent_at": sent_at,
+                })
+                update_opportunity_status(opp["id"], "failed_send")
+
+    log_sms_batch(sms_records)
+    return {"eligible": len(opps), "sent": sent, "failed": failed, "deferred": deferred}
+
+
+def _attribute_interventions(
+    campaign: dict,
+    sales_df: pd.DataFrame,
+    window_end: str | None = None,
+) -> dict:
+    """Attribute plays to open interventions within (sent_at, window_end].
+
+    For the active campaign window_end defaults to now; on close it is the
+    campaign's ended_at. The earliest qualifying play wins; later plays do not
+    change the outcome. Attribution never runs for a non-open intervention.
+    """
+    opens = get_open_interventions(campaign["id"])
+    if not opens:
+        return {"open": 0, "responded": 0, "no_change": 0}
+
+    plays = _plays_map(sales_df)
+    end = (
+        datetime.fromisoformat(window_end)
+        if window_end
+        else datetime.now(timezone.utc)
+    )
     responded = 0
-    for row in open_rows:
-        sent = datetime.fromisoformat(row["sent_at"])
-        if sent.tzinfo is None:
-            sent = sent.replace(tzinfo=timezone.utc)
-        window_end = sent + timedelta(hours=row["window_hours"])
-
-        user_plays = plays[plays["userId"] == row["user_id"]]
-        if user_plays.empty:
+    for inv in opens:
+        sent = datetime.fromisoformat(inv["sent_at"])
+        matched = [p for p in plays.get(inv["user_id"], []) if sent < p <= end]
+        if not matched:
             continue
-        matched = user_plays[
-            (user_plays["timestamp"] > sent)
-            & (user_plays["timestamp"] <= window_end)
-        ]
-        if matched.empty:
-            continue
-        update_welcome_play(row["sms_log_id"], matched["timestamp"].min().isoformat())
+        play = min(matched)
+        record_intervention_response(inv["id"], play.isoformat(), (play - sent).total_seconds())
         responded += 1
 
+    return {"open": len(opens), "responded": responded, "no_change": len(opens) - responded}
+
+
+def finalize_campaign(campaign_id: int):
+    """Terminal pass for a closed campaign.
+
+    Opportunities never evaluated by campaign end expire here (they are not
+    carried into the next campaign), open interventions get their final
+    attribution pass against plays up to ended_at, and any still-open
+    intervention becomes no_response.
+    """
+    campaign = get_campaign(campaign_id)
+    if campaign is None or campaign["status"] != "closed":
+        return
+
+    mark_opportunities_expired(campaign_id)
+    sales_df = _load_csv(settings.SALES_FILE_PATTERN)
+    if not sales_df.empty:
+        attribution = _attribute_interventions(campaign, sales_df, campaign["ended_at"])
+        print(f"Campaign #{campaign_id} final attribution: {attribution}")
+    close_open_interventions(campaign_id)
+    print(f"Campaign #{campaign_id} finalized.")
+
+
+async def run_welcome_pipeline(deadline: datetime, cycle_id: str) -> dict:
+    """Feature 1: one welcome cycle against the active campaign.
+
+    Ingests every Login file overlapping the campaign window, evaluates still-
+    pending opportunities, sends to the eligible, and attributes plays to open
+    interventions. All state lives in the campaign/opportunity/intervention
+    tables; repetitions are idempotent.
+    """
+    campaign = get_active_campaign()
+    if campaign is None:
+        print("Welcome: no active campaign; start one via /campaign/start.")
+        return {
+            "message": "No active campaign. Start one via /campaign/start.",
+            "sent": 0,
+            "count": 0,
+        }
+
+    logins_df = _load_login_events()
+    regs_df = _load_regs()
+    sales_df = _load_csv(settings.SALES_FILE_PATTERN)
+
+    ingested = ingest_opportunities(campaign, logins_df, regs_df)
+    print(f"Welcome: campaign #{campaign['id']} — {ingested} new login opportunity(ies).")
+
+    attribution = _attribute_interventions(campaign, sales_df)
+    if attribution["responded"]:
+        print(f"Welcome attribution: {attribution}")
+
+    evaluation = await _evaluate_campaign(campaign, sales_df, deadline, cycle_id)
+    print(f"Welcome evaluation: {evaluation}")
+
     return {
-        "tracked": len(open_rows),
-        "responded": responded,
-        "open": len(open_rows) - responded,
+        "sent": evaluation["sent"],
+        "failed": evaluation["failed"],
+        "eligible": evaluation["eligible"],
+        "deferred": evaluation.get("deferred", 0),
+        "decisions": evaluation.get("decisions", {}),
+        "attribution": attribution,
+        "count": evaluation["sent"],
     }
 
 
@@ -339,7 +578,7 @@ async def _run_features(deadline: datetime, features: set[str] | None = None) ->
 
     results = {}
     if WELCOME in features:
-        results[WELCOME] = await notify_welcome_users(logins_df, deadline, cycle_id)
+        results[WELCOME] = await run_welcome_pipeline(deadline, cycle_id)
     if INACTIVE in features:
         reset_active_users(logins_df)
         results[INACTIVE] = await notify_inactive_users(logins_df, deadline, cycle_id)
@@ -400,24 +639,6 @@ def _merge_queued(kind: str, users: list[InactiveUser]) -> list[InactiveUser]:
             )
         )
     return users
-
-
-async def notify_welcome_users(logins_df: pd.DataFrame, deadline: datetime, cycle_id: str) -> dict:
-    sales_df = _load_csv(settings.SALES_FILE_PATTERN)
-    users = _merge_queued(WELCOME, find_recent_login_users(logins_df, sales_df))
-    if not users:
-        print("Welcome: no recent-login users to welcome.")
-        result = {"message": "No recent-login users to welcome.", "count": 0}
-    else:
-        print(f"Welcome: {len(users)} user(s) to send to.")
-        result = await _send_users(users, deadline, WELCOME, _build_welcome_message, cycle_id)
-        result["count"] = result.get("sent", 0)
-        print(f"Welcome result: {result}")
-
-    tracking = refresh_welcome_tracking(sales_df)
-    if not tracking.get("disabled"):
-        print(f"Welcome tracking: {tracking}")
-    return result
 
 
 async def notify_inactive_users(logins_df: pd.DataFrame, deadline: datetime, cycle_id: str) -> dict:
@@ -532,16 +753,8 @@ async def _send_users(
 
 
 def _persist_successes(completed: list[tuple[InactiveUser, dict | None]], kind: str):
-    if kind == WELCOME:
-        records = [
-            {"user_id": user.user_id, "last_login_at": user.last_login}
-            for user, result in completed
-            if result and user.last_login
-        ]
-        if records:
-            upsert_welcome_sent(records)
+    if kind != INACTIVE:
         return
-
     records = [
         {
             "user_id": user.user_id,
