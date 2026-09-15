@@ -14,7 +14,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 UV_PID=$!
 
 echo "Starting CSV downloader..."
-python -m app.csv_downloader &
+python -m app.integrations.csv_downloader &
 DL_PID=$!
 
 echo "All services running (uvicorn=$UV_PID, downloader=$DL_PID)"

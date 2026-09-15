@@ -5,22 +5,17 @@ Downloads all 4 tables (Registrations, Deposit events, Withdrawal events, KYC)
 every 65 minutes between START_TIME and END_TIME defined in .env.
 
 Usage:
-    python -m app.csv_downloader
+    python -m app.integrations.csv_downloader
 
 After first install run:  playwright install chromium
 """
 
 import asyncio
 import logging
-import os
 import sys
-from datetime import datetime, timedelta, time as dt_time
-from pathlib import Path
+from datetime import datetime, timedelta
 
-from dotenv import load_dotenv
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env")
+from app.core.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,16 +24,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("csv_downloader")
 
-ALOTBI_URL = os.getenv("ALOTBI_URL", "").rstrip("/")
-ALOTBI_USERNAME = os.getenv("ALOTBI_USERNAME", "")
-ALOTBI_PASSWORD = os.getenv("ALOTBI_PASSWORD", "")
-CSV_DOWNLOADER_ENABLED = (
-    os.getenv("CSV_DOWNLOADER_ENABLED", "true").strip().lower()
-    in ("1", "true", "yes", "on")
-)
-DATA_FOLDER = BASE_DIR / os.getenv("DATA_FOLDER", "data")
-START_TIME_STR = os.getenv("START_TIME", "12:00")
-END_TIME_STR = os.getenv("END_TIME", "13:00")
 INTERVAL_MINUTES = 65
 
 # (tab label on page, file-name prefix)
@@ -53,14 +38,9 @@ TABLES = [
 # ── helpers ──────────────────────────────────────────────────────────
 
 
-def _parse_time(t: str) -> dt_time:
-    h, m = t.strip().split(":")
-    return dt_time(int(h), int(m))
-
-
 def _in_window() -> bool:
     now = datetime.now().time()
-    return _parse_time(START_TIME_STR) <= now <= _parse_time(END_TIME_STR)
+    return settings.START_TIME <= now <= settings.END_TIME
 
 
 def _ts() -> str:
@@ -69,10 +49,14 @@ def _ts() -> str:
 
 def _seconds_until_next_run() -> float:
     now = datetime.now()
-    start_h = _parse_time(START_TIME_STR)
-    end_h = _parse_time(END_TIME_STR)
-    start = now.replace(hour=start_h.hour, minute=start_h.minute, second=0, microsecond=0)
-    end = now.replace(hour=end_h.hour, minute=end_h.minute, second=0, microsecond=0)
+    start = now.replace(
+        hour=settings.START_TIME.hour, minute=settings.START_TIME.minute,
+        second=0, microsecond=0,
+    )
+    end = now.replace(
+        hour=settings.END_TIME.hour, minute=settings.END_TIME.minute,
+        second=0, microsecond=0,
+    )
 
     if now < start:
         return (start - now).total_seconds()
@@ -116,7 +100,7 @@ async def _download_one(page, tab_name: str, prefix: str, ts: str) -> bool:
         async with page.expect_download(timeout=60_000) as dl_info:
             await csv_item.first.click()
         download = await dl_info.value
-        dest = DATA_FOLDER / f"{prefix}_{ts}.csv"
+        dest = settings.DATA_FOLDER / f"{prefix}_{ts}.csv"
         await download.save_as(str(dest))
         log.info("  Saved %s", dest.name)
         return True
@@ -132,7 +116,7 @@ async def _download_one(page, tab_name: str, prefix: str, ts: str) -> bool:
 async def run_download_cycle():
     from playwright.async_api import async_playwright
 
-    DATA_FOLDER.mkdir(parents=True, exist_ok=True)
+    settings.DATA_FOLDER.mkdir(parents=True, exist_ok=True)
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
@@ -140,10 +124,10 @@ async def run_download_cycle():
         page = await ctx.new_page()
 
         # ── Login ──
-        log.info("Logging in to %s", ALOTBI_URL)
-        await page.goto(f"{ALOTBI_URL}/login/", wait_until="networkidle")
-        await page.fill('input[name="username"]', ALOTBI_USERNAME)
-        await page.fill('input[name="password"]', ALOTBI_PASSWORD)
+        log.info("Logging in to %s", settings.ALOTBI_URL)
+        await page.goto(f"{settings.ALOTBI_URL}/login/", wait_until="networkidle")
+        await page.fill('input[name="username"]', settings.ALOTBI_USERNAME)
+        await page.fill('input[name="password"]', settings.ALOTBI_PASSWORD)
         await page.click('button[type="submit"], input[type="submit"]')
         await page.wait_for_load_state("networkidle")
         await asyncio.sleep(2)
@@ -156,7 +140,7 @@ async def run_download_cycle():
         else:
             log.warning("Sidebar link not found – navigating directly")
             await page.goto(
-                f"{ALOTBI_URL}/superset/dashboard/customer-data/",
+                f"{settings.ALOTBI_URL}/superset/dashboard/customer-data/",
                 wait_until="networkidle",
             )
         await page.wait_for_load_state("networkidle")
@@ -181,19 +165,19 @@ async def run_download_cycle():
 
 
 async def main():
-    if not CSV_DOWNLOADER_ENABLED:
+    if not settings.CSV_DOWNLOADER_ENABLED:
         log.info(
             "CSV_DOWNLOADER_ENABLED=false - auto-scraping disabled. "
             "Add CSV files to %s manually.",
-            DATA_FOLDER,
+            settings.DATA_FOLDER,
         )
         return
 
     log.info(
         "CSV Downloader started – every %d min, window %s–%s",
         INTERVAL_MINUTES,
-        START_TIME_STR,
-        END_TIME_STR,
+        settings.START_TIME,
+        settings.END_TIME,
     )
 
     while True:

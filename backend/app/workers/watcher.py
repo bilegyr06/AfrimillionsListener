@@ -7,10 +7,11 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from app import state
-from app.config import settings
-from app.database import has_pending
-from app.processor import begin_cycle, enabled_features
+from app.core import state
+from app.core.config import settings
+from app.db.database import has_pending
+from app.services.sms import sync_delivery_statuses
+from app.workers.processor import begin_cycle, enabled_features
 
 AUTO_START_POLL_SECONDS = 60
 STATS_SYNC_POLL_SECONDS = 30 * 60  # 30 minutes
@@ -47,8 +48,6 @@ def _stats_sync_loop():
 
 
 def _schedule_stats_sync():
-    from app.stats_updater import sync_delivery_statuses
-
     async def _do_sync():
         try:
             result = await sync_delivery_statuses()

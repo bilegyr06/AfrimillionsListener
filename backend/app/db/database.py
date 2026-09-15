@@ -2,7 +2,7 @@ import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from app.config import settings
+from app.core.config import settings
 
 
 def get_connection() -> sqlite3.Connection:
@@ -112,8 +112,34 @@ def init_db():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            original_filename TEXT NOT NULL,
+            stored_filename TEXT NOT NULL,
+            dataset TEXT NOT NULL,
+            uploaded_at TEXT NOT NULL,
+            uploaded_by TEXT,
+            status TEXT NOT NULL DEFAULT 'received',
+            row_count INTEGER,
+            parse_error TEXT,
+            processed_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     _ensure_column(conn, "pending_queue", "kind", "TEXT NOT NULL DEFAULT 'inactive'")
     _ensure_column(conn, "pending_queue", "last_login_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "welcome_campaigns", "config", "TEXT")
 
     # Legacy welcome tables are no longer sources of truth; the state now lives
     # in campaigns/opportunities/interventions. Dropping them is the migration.
@@ -316,11 +342,13 @@ def get_welcome_sms_state() -> dict[str, dict]:
 # Welcome campaigns
 # ---------------------------------------------------------------------------
 
-def create_campaign(name: str | None = None) -> dict:
+def create_campaign(name: str | None = None, config: str | None = None) -> dict:
     """Start a new campaign, closing any currently active one at its end.
 
     Starting a campaign is the only way a campaign window is opened; campaigns
-    are never auto-created. Returns the new campaign plus the campaign that was
+    are never auto-created. `config` is an optional JSON snapshot of the
+    operator settings in force at start time (kept for audit; the engine reads
+    live settings). Returns the new campaign plus the campaign that was
     closed by this transition (if any).
     """
     now = datetime.now(timezone.utc).isoformat()
@@ -337,9 +365,9 @@ def create_campaign(name: str | None = None) -> dict:
         closed = dict(active)
 
     cursor = conn.execute(
-        "INSERT INTO welcome_campaigns (name, started_at, status, created_at) "
-        "VALUES (?, ?, 'active', ?)",
-        (name, now, now),
+        "INSERT INTO welcome_campaigns (name, started_at, status, created_at, config) "
+        "VALUES (?, ?, 'active', ?, ?)",
+        (name, now, now, config),
     )
     new = dict(
         conn.execute("SELECT * FROM welcome_campaigns WHERE id = ?", (cursor.lastrowid,)).fetchone()
@@ -621,6 +649,37 @@ def get_campaign_stats(campaign_id: int) -> dict:
     }
 
 
+def list_campaign_customers(campaign_id: int, limit: int = 50, offset: int = 0) -> list[dict]:
+    """Paged per-customer view of a campaign (opportunities + their outcome)."""
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT o.user_id, o.first_name, o.phone_raw, o.phone_normalized,
+               o.login_at, o.status AS opportunity_status,
+               i.status AS intervention_status, i.sent_at, i.play_at,
+               i.response_seconds
+        FROM welcome_opportunities o
+        LEFT JOIN welcome_interventions i ON i.opportunity_id = o.id
+        WHERE o.campaign_id = ?
+        ORDER BY o.login_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        (campaign_id, limit, offset),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def count_campaign_customers(campaign_id: int) -> int:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM welcome_opportunities WHERE campaign_id = ?",
+        (campaign_id,),
+    ).fetchone()
+    conn.close()
+    return row["n"]
+
+
 # ---------------------------------------------------------------------------
 # SMS log
 # ---------------------------------------------------------------------------
@@ -723,6 +782,8 @@ def get_sms_logs(
     kind: str | None = None,
     since: str | None = None,
     until: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[dict]:
     """Query SMS logs with optional kind and date-range filters."""
     clauses: list[str] = []
@@ -738,12 +799,40 @@ def get_sms_logs(
         params.append(until)
 
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = f"SELECT * FROM sms_log{where} ORDER BY id"
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params.append(limit)
+        params.append(offset)
     conn = get_connection()
-    rows = conn.execute(
-        f"SELECT * FROM sms_log{where} ORDER BY id", params
-    ).fetchall()
+    rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def count_sms_logs(
+    kind: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> int:
+    """Count SMS log rows matching the same filters as get_sms_logs."""
+    clauses: list[str] = []
+    params: list = []
+    if kind:
+        clauses.append("kind = ?")
+        params.append(kind)
+    if since:
+        clauses.append("sent_at >= ?")
+        params.append(since)
+    if until:
+        clauses.append("sent_at <= ?")
+        params.append(until)
+
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    conn = get_connection()
+    row = conn.execute(f"SELECT COUNT(*) AS n FROM sms_log{where}", params).fetchone()
+    conn.close()
+    return row["n"]
 
 
 def get_stats_summary(
@@ -861,3 +950,62 @@ def get_latest_wallet() -> dict | None:
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Uploaded files registry
+# ---------------------------------------------------------------------------
+
+def insert_file(record: dict) -> int:
+    """Register an uploaded data file. Returns the new row id."""
+    conn = get_connection()
+    cursor = conn.execute(
+        """
+        INSERT INTO files
+            (original_filename, stored_filename, dataset, uploaded_at,
+             uploaded_by, status, row_count, parse_error, processed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record["original_filename"],
+            record["stored_filename"],
+            record["dataset"],
+            record["uploaded_at"],
+            record.get("uploaded_by"),
+            record.get("status", "received"),
+            record.get("row_count"),
+            record.get("parse_error"),
+            record.get("processed_at"),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return cursor.lastrowid
+
+
+def get_file(file_id: int) -> dict | None:
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def list_files(limit: int = 100) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM files ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def update_file_outcome(file_id: int, status: str, *, row_count: int | None = None,
+                        parse_error: str | None = None):
+    """Finalize an upload's ingestion outcome."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    conn.execute(
+        "UPDATE files SET status = ?, row_count = ?, parse_error = ?, processed_at = ? "
+        "WHERE id = ?",
+        (status, row_count, parse_error, now, file_id),
+    )
+    conn.commit()
+    conn.close()

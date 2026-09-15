@@ -18,8 +18,9 @@ os.environ.setdefault("TERMII_API_KEY", "test-key")
 os.environ.setdefault("TERMII_BASE_URL", "https://test.api.termii.com/api")
 os.environ.setdefault("TERMII_SENDER_ID", "TestSender")
 
-from app.config import settings
-from app.database import (
+from app.core.config import settings
+from app.core.phones import gate_phone, is_valid_nigerian_phone, normalize_phone
+from app.db.database import (
     close_active_campaign,
     create_campaign,
     create_intervention,
@@ -31,10 +32,7 @@ from app.database import (
     update_opportunity_status,
     upsert_opportunities,
 )
-from app.processor import (
-    _is_valid_nigerian_phone,
-    _normalize_phone,
-    _phone_gate,
+from app.services.campaigns import (
     finalize_campaign,
     ingest_opportunities,
     run_welcome_pipeline,
@@ -111,7 +109,7 @@ def _run(campaign=None):
 def _monkeypatch_send(monkeypatch, result: dict | None):
     async def _fake_send(phone, message):
         return result
-    monkeypatch.setattr("app.processor.send_sms", _fake_send)
+    monkeypatch.setattr("app.integrations.termii.send_sms", _fake_send)
 
 
 def _seed_success(campaign_id: int, user_id: str, login_at: str, sent_at: str,
@@ -166,27 +164,27 @@ def _intervention_states(campaign_id: int) -> dict:
 
 class TestPhoneGate:
     def test_normalization_forms(self):
-        assert _normalize_phone("07870123456") == "2347870123456"
-        assert _normalize_phone("08012345678") == "2348012345678"
-        assert _normalize_phone("8012345678") == "2348012345678"
-        assert _normalize_phone("+234 801 2345 678") == "2348012345678"
-        assert _normalize_phone("not-a-phone") is None
+        assert normalize_phone("07870123456") == "2347870123456"
+        assert normalize_phone("08012345678") == "2348012345678"
+        assert normalize_phone("8012345678") == "2348012345678"
+        assert normalize_phone("+234 801 2345 678") == "2348012345678"
+        assert normalize_phone("not-a-phone") is None
 
     def test_valid_nigerian_mobile(self):
-        assert _is_valid_nigerian_phone("2348012345678")
-        assert _is_valid_nigerian_phone("2347078654321")
+        assert is_valid_nigerian_phone("2348012345678")
+        assert is_valid_nigerian_phone("2347078654321")
 
     def test_invalid_numbers_rejected(self):
         # Ghanaian format is normalized but NOT a Nigerian mobile -> rejected
-        assert _is_valid_nigerian_phone("233999999999") is False
+        assert is_valid_nigerian_phone("233999999999") is False
         # 13 digits but network code starts with 1 -> rejected
-        assert _is_valid_nigerian_phone("2341234567890") is False
-        assert _is_valid_nigerian_phone("1234567890123") is False
-        assert _is_valid_nigerian_phone(None) is False
+        assert is_valid_nigerian_phone("2341234567890") is False
+        assert is_valid_nigerian_phone("1234567890123") is False
+        assert is_valid_nigerian_phone(None) is False
 
     def test_phone_gate_normalizes_valid_only(self):
-        assert _phone_gate("08012345678") == "2348012345678"
-        assert _phone_gate("233999999999") is None
+        assert gate_phone("08012345678") == "2348012345678"
+        assert gate_phone("233999999999") is None
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +408,7 @@ class TestEvaluation:
             calls.append(phone)
             return {"message_id": "mid"}
 
-        monkeypatch.setattr("app.processor.send_sms", _fake_send)
+        monkeypatch.setattr("app.integrations.termii.send_sms", _fake_send)
         campaign = _start_campaign(hours_ago=6)
         # Registrations carries a Ghanaian-style number that fails the gate.
         pd.DataFrame(

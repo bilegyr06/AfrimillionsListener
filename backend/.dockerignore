@@ -1,0 +1,7 @@
+# Backend build context for the Afrimillions container.
+
+tests/
+.pytest-tmp/
+.pytest_cache/
+__pycache__/
+*.pyc

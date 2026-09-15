@@ -22,8 +22,8 @@ def _isolated_db(monkeypatch):
     db_path = test_id / "test.db"
     data_dir = test_id / "data"
     data_dir.mkdir(exist_ok=True)
-    monkeypatch.setattr("app.config.settings.DB_PATH", db_path)
-    monkeypatch.setattr("app.config.settings.DATA_FOLDER", data_dir)
+    monkeypatch.setattr("app.core.config.settings.DB_PATH", db_path)
+    monkeypatch.setattr("app.core.config.settings.DATA_FOLDER", data_dir)
     yield db_path
     shutil.rmtree(test_id, ignore_errors=True)
 
@@ -31,6 +31,6 @@ def _isolated_db(monkeypatch):
 @pytest.fixture()
 def _init_db(_isolated_db):
     """Initialize the database tables."""
-    from app.database import init_db
+    from app.db.database import init_db
     init_db()
     return _isolated_db

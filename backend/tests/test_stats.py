@@ -13,7 +13,7 @@ os.environ.setdefault("TERMII_API_KEY", "test-key")
 os.environ.setdefault("TERMII_BASE_URL", "https://test.api.termii.com/api")
 os.environ.setdefault("TERMII_SENDER_ID", "TestSender")
 
-from app.database import (
+from app.db.database import (
     get_connection,
     get_cycle_stats,
     get_latest_wallet,
@@ -26,7 +26,7 @@ from app.database import (
     log_wallet_snapshot,
     update_sms_status,
 )
-from app.stats_updater import sync_delivery_statuses
+from app.services.sms import sync_delivery_statuses
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +271,7 @@ class TestStatsUpdater:
             return mock_history
 
         with patch(
-            "app.stats_updater.get_message_history",
+            "app.integrations.termii.get_message_history",
             side_effect=_mock_get_history,
         ) as mock_fn:
             result = await sync_delivery_statuses()
@@ -291,7 +291,7 @@ class TestStatsUpdater:
         })
 
         with patch(
-            "app.stats_updater.get_message_history",
+            "app.integrations.termii.get_message_history",
             new_callable=AsyncMock,
         ) as mock_fn:
             result = await sync_delivery_statuses()
@@ -307,7 +307,7 @@ class TestStatsUpdater:
         })
 
         with patch(
-            "app.stats_updater.get_message_history",
+            "app.integrations.termii.get_message_history",
             new_callable=AsyncMock,
             side_effect=Exception("Termii API unreachable"),
         ):
@@ -324,7 +324,7 @@ class TestStatsUpdater:
         })
 
         with patch(
-            "app.stats_updater.get_message_history",
+            "app.integrations.termii.get_message_history",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -343,7 +343,7 @@ class TestStatsUpdater:
         mock_history = [{"status": "DND Active on Phone Number", "amount": 1.0}]
 
         with patch(
-            "app.stats_updater.get_message_history",
+            "app.integrations.termii.get_message_history",
             new_callable=AsyncMock,
             return_value=mock_history,
         ):

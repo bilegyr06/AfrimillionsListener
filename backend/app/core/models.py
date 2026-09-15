@@ -1,5 +1,9 @@
 from dataclasses import dataclass
 
+# Feature identifiers used to gate and report per-feature work.
+WELCOME = "welcome"
+INACTIVE = "inactive"
+
 
 @dataclass
 class InactiveUser:
