@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$deployDir = Split-Path -Parent $PSScriptRoot
+$deployDir = $PSScriptRoot
 $dockerDesktop = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
 $docker = "C:\Program Files\Docker\Docker\resources\bin\docker.exe"
 
