@@ -136,6 +136,13 @@ export interface CustomerRow {
   sent_at: string | null;
   play_at: string | null;
   response_seconds: number | null;
+  // Enriched phase-3 drill-down fields: the SMS delivery outcome of the
+  // accepted send plus the customer's qualifying activity inside the campaign
+  // attribution window.
+  delivery_status: string | null;
+  qualifying_plays: number;
+  attributed_amount: number;
+  games_played: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +313,7 @@ export interface CampaignActivity {
   single_play_players: number;
   repeat_players: number;
   converted_players: number;
+  game_count: number;
   avg_plays_per_player: number | null;
   avg_plays_per_converted: number | null;
   avg_plays_per_contacted: number | null;
@@ -334,11 +342,20 @@ export interface CampaignWindow {
   description: string;
 }
 
+// Money/rate convention (shared by every reporting surface): a rate or unit
+// cost whose denominator is zero is null ("unavailable"), never a fallback 0.
+// "Activity/cost ratio" = attributed play amount / SMS cost for the campaign's
+// own accepted Welcome SMS. It is a descriptive ratio of available data, not
+// ROI, and total_play_amount is not revenue.
 export interface CampaignEconomics {
   sms_cost: number;
   avg_cost_per_accepted: number | null;
   cost_per_contacted: number | null;
   cost_per_conversion: number | null;
+  total_play_amount: number;
+  play_amount_per_converted: number | null;
+  play_amount_per_contacted: number | null;
+  activity_cost_ratio: number | null;
 }
 
 // The conceptual conversion funnel. Stages are heterogeneous by design: they
@@ -394,8 +411,5 @@ export interface CampaignStatisticsSummary {
     players: number;
     total_play_amount: number;
   };
-  economics: {
-    cost_per_contacted: number | null;
-    cost_per_conversion: number | null;
-  };
+  economics: CampaignEconomics;
 }

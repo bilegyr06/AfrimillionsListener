@@ -1,6 +1,12 @@
 // Full statistics report for one campaign. Shared by the overview page (which
 // renders it for the selected campaign) and the per-campaign page, so both
 // surfaces present the same sections, numbers, and export.
+//
+// The information architecture follows the campaign chain from left to right:
+// Campaign overview -> Customer response -> Player activity -> Game activity ->
+// SMS performance -> Campaign economics. "Economics" never claims profitability:
+// it reports the sms cost and the attributed play amount, and the
+// activity/cost ratio is a descriptive ratio of available data, not ROI.
 
 "use client";
 
@@ -51,8 +57,8 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
   const timing = response.time_to_first_play;
   const attributionNote =
     campaign.status === "active"
-      ? "Attribution window: SMS sent \u2192 now (rolling while active)"
-      : `Attribution window: SMS sent \u2192 ${formatDateTime(window.attribution_end)}`;
+      ? "SMS sent \u2192 now (rolling while active)"
+      : `SMS sent \u2192 ${formatDateTime(window.attribution_end)}`;
   const notSentTotal = Object.values(audience.not_sent_to).reduce((sum, n) => sum + n, 0);
 
   const snapshot = useMemo(() => buildStatisticsSnapshot(detail), [detail]);
@@ -60,7 +66,7 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
   return (
     <>
       <StatSection
-        title="Campaign window"
+        title="Campaign overview"
         aside={
           <div className="actions" style={{ margin: 0 }}>
             <button className="btn btn-secondary btn-sm" onClick={() => setSnapshotOpen(true)}>
@@ -76,10 +82,8 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
                 label: "Period",
                 value: `${formatDateTime(campaign.started_at)}\u2009\u2192\u2009${campaign.ended_at ? formatDateTime(campaign.ended_at) : "present"}`,
               },
-              {
-                label: "Attribution",
-                value: attributionNote,
-              },
+              { label: "Status", value: campaign.status },
+              { label: "Attribution", value: attributionNote },
               {
                 label: "Attribution end",
                 value: window.attribution_end ? formatDateTime(window.attribution_end) : "Now (rolling while active)",
@@ -87,12 +91,6 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
             ]}
           />
         </div>
-      </StatSection>
-
-      <StatSection
-        title="Campaign funnel"
-        aside={<span className="muted small">Logins \u2192 customers \u2192 sends \u2192 delivery \u2192 conversions</span>}
-      >
         <div className="section-body flush">
           <MetricStrip>
             <Metric label="Opportunities" value={formatNumber(funnel.opportunities)} />
@@ -105,17 +103,29 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
             <Metric label="Conversion rate" value={formatPercent(response.conversion_rate)} />
           </MetricTier>
         </div>
+        <div className="section-body flush" style={{ paddingTop: 0 }}>
+          <MetricStrip>
+            <Metric label="Pending evaluation" value={formatNumber(audience.pending_evaluation)} />
+            <Metric label="Not sent to" value={formatNumber(notSentTotal)} />
+          </MetricStrip>
+        </div>
         <div className="section-body" style={{ paddingTop: 0 }}>
+          <KvRows
+            rows={NOT_SENT_ROWS.map(([key, label]) => ({
+              label,
+              value: formatNumber(audience.not_sent_to[key as keyof typeof audience.not_sent_to]),
+            }))}
+          />
           <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
-            Stages move from login events to distinct customers, then to accepted
-            SMS sends, delivery outcomes, and finally to converted customers. A
-            customer can appear in more than one stage, so the funnel is not a set
-            of strict one-to-one drops.
+            The funnel moves from login events to distinct customers, then to
+            accepted SMS sends, delivery outcomes, and finally to converted
+            customers. A customer can appear in more than one stage, so the
+            funnel is not a set of strict one-to-one drops.
           </p>
         </div>
       </StatSection>
 
-      <StatSection title="Player response" aside={<span className="muted small">Within the attribution window</span>}>
+      <StatSection title="Customer response" aside={<span className="muted small">Within the attribution window</span>}>
         <div className="section-body flush">
           <MetricStrip>
             <Metric label="Customers contacted" value={formatNumber(response.contacted_customers)} />
@@ -142,14 +152,11 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
             ]}
           />
         </div>
-      </StatSection>
-
-      <StatSection title="Time to first qualifying play" aside={<span className="muted small">From SMS sent to first play, per customer</span>}>
-        <div className="section-body flush">
+        <div className="section-body flush" style={{ paddingTop: 0 }}>
           <table className="table">
             <thead>
               <tr>
-                <th>Bucket</th>
+                <th>Time to first qualifying play</th>
                 <th className="num right">Customers</th>
               </tr>
             </thead>
@@ -162,70 +169,6 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
               ))}
             </tbody>
           </table>
-        </div>
-      </StatSection>
-
-      <StatSection title="SMS performance" aside={<span className="muted small">Accepted Welcome SMS delivery funnel</span>}>
-        <div className="section-body flush">
-          <MetricStrip>
-            <Metric label="Accepted (sent)" value={formatNumber(sms.accepted)} />
-            <Metric label="Customers contacted" value={formatNumber(sms.contacted_customers)} />
-            <Metric label="Delivered" value={formatNumber(sms.delivered)} accent />
-          </MetricStrip>
-          <MetricTierSm>
-            <Metric label="Failed" value={formatNumber(sms.failed)} />
-            <Metric label="Rejected" value={formatNumber(sms.rejected)} />
-            <Metric label="Blocked (DND)" value={formatNumber(sms.dnd)} />
-            <Metric label="Deferred" value={formatNumber(sms.deferred)} />
-            <Metric label="Expired" value={formatNumber(sms.expired)} />
-          </MetricTierSm>
-        </div>
-        <div className="section-body" style={{ paddingTop: 0 }}>
-          <KvRows
-            rows={[
-              {
-                label: "Delivery rate",
-                value:
-                  sms.delivery_rate == null
-                    ? "No accepted sends to measure"
-                    : `${formatPercent(sms.delivery_rate)} of accepted sends`,
-              },
-              {
-                label: "Awaiting delivery",
-                value: `${formatNumber(sms.sent_awaiting_delivery)}${sms.unmatched > 0 ? ` \u00b7 ${formatNumber(sms.unmatched)} unmatched to delivery log` : ""}`,
-              },
-            ]}
-          />
-          <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
-            Deferred means the send was accepted but no provider call was made;
-            those sends never produce a delivery confirmation.
-          </p>
-        </div>
-      </StatSection>
-
-      <StatSection title="Audience" aside={<span className="muted small">Logins inside the campaign window</span>}>
-        <div className="section-body flush">
-          <MetricStrip>
-            <Metric label="Opportunities" value={formatNumber(audience.opportunities)} />
-            <Metric label="Unique customers" value={formatNumber(audience.unique_customers)} />
-            <Metric label="Pending evaluation" value={formatNumber(audience.pending_evaluation)} />
-          </MetricStrip>
-        </div>
-        <div className="section-body" style={{ paddingTop: 0 }}>
-          <KvRows
-            rows={[
-              {
-                label: "Not sent to",
-                value: `${formatNumber(notSentTotal)} customers`,
-              },
-              ...NOT_SENT_ROWS.map(([key, label]) => ({
-                label,
-                value: formatNumber(
-                  audience.not_sent_to[key as keyof typeof audience.not_sent_to],
-                ),
-              })),
-            ]}
-          />
         </div>
       </StatSection>
 
@@ -245,6 +188,7 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
         <div className="section-body" style={{ paddingTop: 0 }}>
           <KvRows
             rows={[
+              { label: "Games played", value: formatNumber(activity.game_count) },
               { label: "Played once", value: formatNumber(activity.single_play_players) },
               { label: "Average plays per player", value: formatRatio(activity.avg_plays_per_player) },
               { label: "Average plays per converted customer", value: formatRatio(activity.avg_plays_per_converted) },
@@ -303,19 +247,67 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
         </div>
       </StatSection>
 
-      <StatSection title="Campaign cost" aside={<span className="muted small">SMS cost only</span>}>
+      <StatSection title="SMS performance" aside={<span className="muted small">Accepted Welcome SMS delivery funnel</span>}>
+        <div className="section-body flush">
+          <MetricStrip>
+            <Metric label="Accepted (sent)" value={formatNumber(sms.accepted)} />
+            <Metric label="Customers contacted" value={formatNumber(sms.contacted_customers)} />
+            <Metric label="Delivered" value={formatNumber(sms.delivered)} accent />
+          </MetricStrip>
+          <MetricTierSm>
+            <Metric label="Failed" value={formatNumber(sms.failed)} />
+            <Metric label="Rejected" value={formatNumber(sms.rejected)} />
+            <Metric label="Blocked (DND)" value={formatNumber(sms.dnd)} />
+            <Metric label="Deferred" value={formatNumber(sms.deferred)} />
+            <Metric label="Expired" value={formatNumber(sms.expired)} />
+          </MetricTierSm>
+        </div>
+        <div className="section-body" style={{ paddingTop: 0 }}>
+          <KvRows
+            rows={[
+              {
+                label: "Delivery rate",
+                value:
+                  sms.delivery_rate == null
+                    ? "No accepted sends to measure"
+                    : `${formatPercent(sms.delivery_rate)} of accepted sends`,
+              },
+              {
+                label: "Awaiting delivery",
+                value: `${formatNumber(sms.sent_awaiting_delivery)}${sms.unmatched > 0 ? ` \u00b7 ${formatNumber(sms.unmatched)} unmatched to delivery log` : ""}`,
+              },
+              {
+                label: "Avg cost per accepted SMS",
+                value: formatMoney(economics.avg_cost_per_accepted),
+              },
+            ]}
+          />
+          <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
+            Deferred means the send was accepted but no provider call was made;
+            those sends never produce a delivery confirmation.
+          </p>
+        </div>
+      </StatSection>
+
+      <StatSection title="Campaign economics" aside={<span className="muted small">SMS cost vs attributed play amount</span>}>
         <div className="section-body">
           <KvRows
             rows={[
               { label: "SMS cost", value: formatMoney(economics.sms_cost) },
-              { label: "Avg cost per accepted SMS", value: formatMoney(economics.avg_cost_per_accepted) },
               { label: "Cost per contacted customer", value: formatMoney(economics.cost_per_contacted) },
               { label: "Cost per conversion", value: formatMoney(economics.cost_per_conversion) },
+              { label: "Attributed play amount", value: formatMoney(economics.total_play_amount) },
+              { label: "Play amount per converted customer", value: formatMoney(economics.play_amount_per_converted) },
+              { label: "Play amount per contacted customer", value: formatMoney(economics.play_amount_per_contacted) },
+              { label: "Activity / cost ratio", value: formatRatio(economics.activity_cost_ratio) },
             ]}
           />
           <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
-            A \u201c\u2014\u201d cost-per row means there is no customer column to divide over,
-            not a zero cost.
+            SMS cost covers this campaign\u2019s own accepted Welcome SMS. A
+            \u201c\u2014\u201d on a per-customer row means there is no customer column to
+            divide over, not a zero cost. Attributed play amount is the qualifying
+            plays inside the attribution window \u2014 it is not revenue, and the
+            activity/cost ratio is a descriptive ratio of available data, not ROI.
           </p>
         </div>
       </StatSection>

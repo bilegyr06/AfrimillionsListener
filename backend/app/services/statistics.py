@@ -23,6 +23,21 @@ Terminology is strict and stable:
                         activity group below is the total-play-volume view.
   players               distinct customers with at least one qualifying play
   repeat_players        distinct players with two or more qualifying plays
+  game_count            distinct games with a qualifying play in the window
+
+Campaign SMS cost: the provider-charged cost of the campaign's OWN accepted
+Welcome SMS. The funnel joins welcome_interventions (accepted sends of this
+campaign) to sms_log on message_id, so only money actually charged for those
+messages is summed (UPDATE-based delivery status sync keeps one sms_log row
+per message). Failed/rejected/Deferred attempts never create an intervention
+and are never charged here; Inactive, Manual, and other-campaign Welcome SMS
+cannot match this campaign's message_ids.
+
+"Attributed play amount" is the amount of qualifying plays inside the
+attribution window (never lifetime history) and is deliberately not called
+revenue or profit. "activity_cost_ratio" = attributed play amount / SMS cost
+is a descriptive ratio of available data, not ROI; ROI would require revenue,
+margin, or profit data.
 
 The attribution window opens at a customer's first accepted Welcome SMS in the
 campaign (per-campaign first sent_at) and closes at ended_at for closed
@@ -43,6 +58,7 @@ from app.core.models import WELCOME
 from app.db.database import (
     get_campaign,
     get_campaign_audience,
+    get_campaign_game_count,
     get_campaign_game_stats,
     get_campaign_intervention_counts,
     get_campaign_play_edges,
@@ -219,10 +235,61 @@ def _activity_group(campaign: dict, contacted_customers: int, game_limit: int = 
         }
         for g in get_campaign_game_stats(campaign["id"], window_end, limit=game_limit)
     ]
+    metrics = _activity_metrics(play_stats, converted, edges, contacted_customers)
+    metrics["game_count"] = get_campaign_game_count(campaign["id"], window_end)
     return {
         "window_end": window_end,
-        "metrics": _activity_metrics(play_stats, converted, edges, contacted_customers),
+        "metrics": metrics,
         "games": games,
+    }
+
+
+def _economics_group(
+    sms_cost: float,
+    sms_accepted: int,
+    contacted_customers: int,
+    converted_customers: int,
+    total_play_amount: float,
+) -> dict:
+    """Campaign economics for one campaign.
+
+    SMS cost is the provider-charged cost of the campaign's own accepted
+    Welcome SMS: sms_log rows matched to interventions of THIS campaign via
+    message_id. Failed, rejected, and Deferred sends never create an
+    intervention, so they are never charged here; Inactive, Manual, and
+    other-campaign Welcome SMS cannot match these message_ids. That is the
+    cost definition shared by every surface (report, summary, comparison).
+
+    "Attributed play amount" is the amount of qualifying plays inside the
+    attribution window, never the customer's lifetime play history, and it is
+    intentionally NOT called revenue or profit. The activity/cost ratio is a
+    descriptive ratio of attributed play amount to SMS cost based on available
+    data; real ROI would need revenue/margin data we do not have.
+
+    A rate whose denominator is zero is None (unavailable), never a fallback.
+    """
+    cost = round(sms_cost, 2)
+    return {
+        "sms_cost": cost,
+        "avg_cost_per_accepted": (
+            round(cost / sms_accepted, 2) if sms_accepted else None
+        ),
+        "cost_per_contacted": (
+            round(cost / contacted_customers, 2) if contacted_customers else None
+        ),
+        "cost_per_conversion": (
+            round(cost / converted_customers, 2) if converted_customers else None
+        ),
+        "total_play_amount": round(total_play_amount, 2),
+        "play_amount_per_converted": (
+            round(total_play_amount / converted_customers, 2) if converted_customers else None
+        ),
+        "play_amount_per_contacted": (
+            round(total_play_amount / contacted_customers, 2) if contacted_customers else None
+        ),
+        "activity_cost_ratio": (
+            round(total_play_amount / cost, 2) if cost else None
+        ),
     }
 
 
@@ -250,13 +317,19 @@ def campaign_statistics(campaign_id: int, game_limit: int = 10) -> dict | None:
     rate = round(converted / contacted, 4) if contacted else 0.0
     delivery_rate = round(funnel["delivered"] / funnel["accepted"], 4) if funnel["accepted"] else None
     avg_cost = round(funnel["cost"] / funnel["accepted"], 2) if funnel["accepted"] else None
-    cost_per_contacted = round(funnel["cost"] / contacted, 2) if contacted else None
-    cost_per_conversion = round(funnel["cost"] / converted, 2) if converted else None
 
     statuses = audience["statuses"]
     not_sent_to = {
         status: statuses.get(status, {"rows": 0})["rows"] for status in _NOT_SENT_STATUSES
     }
+
+    economics = _economics_group(
+        sms_cost=funnel["cost"],
+        sms_accepted=funnel["accepted"],
+        contacted_customers=contacted,
+        converted_customers=converted,
+        total_play_amount=activity["metrics"]["total_play_amount"],
+    )
 
     return {
         "campaign": {
@@ -329,12 +402,7 @@ def campaign_statistics(campaign_id: int, game_limit: int = 10) -> dict | None:
         },
         "activity": {**activity["metrics"], "window_end": activity["window_end"]},
         "games": activity["games"],
-        "economics": {
-            "sms_cost": round(funnel["cost"], 2),
-            "avg_cost_per_accepted": avg_cost,
-            "cost_per_contacted": cost_per_contacted,
-            "cost_per_conversion": cost_per_conversion,
-        },
+        "economics": economics,
     }
 
 
@@ -409,10 +477,13 @@ def campaign_summaries(limit: int = 50) -> list[dict]:
                     "players": int(plays["players"]),
                     "total_play_amount": round(float(plays["total_amount"]), 2),
                 },
-                "economics": {
-                    "cost_per_contacted": round(cost / contacted, 2) if contacted else None,
-                    "cost_per_conversion": round(cost / converted, 2) if converted else None,
-                },
+                "economics": _economics_group(
+                    sms_cost=funnel["cost"],
+                    sms_accepted=funnel["accepted"],
+                    contacted_customers=contacted,
+                    converted_customers=converted,
+                    total_play_amount=plays["total_amount"],
+                ),
             }
         )
     return summaries

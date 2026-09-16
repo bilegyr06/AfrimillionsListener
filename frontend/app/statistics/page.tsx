@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import StatusPill from "@/components/status-pill";
+import { CampaignComparison } from "@/components/statistics/campaign-comparison";
 import CampaignReport from "@/components/statistics/campaign-report";
 import { CampaignSelect } from "@/components/statistics/campaign-select";
 import StatSection from "@/components/statistics/section";
@@ -26,6 +27,7 @@ import { useQuery } from "@/lib/use-query";
 export default function StatisticsPage() {
   const [status, setStatus] = useState<CampaignStatusFilter>("all");
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [compareIds, setCompareIds] = useState<number[]>([]);
 
   const campaigns = useQuery<CampaignStatisticsSummary[]>(
     () => apiGet("/stats/campaigns", { limit: 200 }),
@@ -54,6 +56,14 @@ export default function StatisticsPage() {
     if (status === "all") return list;
     return list.filter((c) => c.status === status);
   }, [campaigns.data, status]);
+
+  const toggleCompare = (campaignId: number) => {
+    setCompareIds((prev) =>
+      prev.includes(campaignId)
+        ? prev.filter((id) => id !== campaignId)
+        : [...prev, campaignId],
+    );
+  };
 
   return (
     <div className="page">
@@ -108,9 +118,32 @@ export default function StatisticsPage() {
         )}
       </StatSection>
 
+      {compareIds.length >= 2 ? (
+        <CampaignComparison
+          ids={compareIds}
+          onClose={() => setCompareIds([])}
+        />
+      ) : null}
+
       <StatSection
         title="All campaigns"
-        aside={<StatusFilter value={status} onChange={setStatus} />}
+        aside={
+          <div className="actions" style={{ margin: 0 }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              disabled={compareIds.length < 2}
+              title={
+                compareIds.length < 2
+                  ? "Select at least two campaigns to compare"
+                  : "Compare selected campaigns"
+              }
+              onClick={() => setCompareIds((prev) => (prev.length >= 2 ? [] : prev))}
+            >
+              {compareIds.length >= 2 ? `Compare ${compareIds.length} selected` : "Compare"}
+            </button>
+            <StatusFilter value={status} onChange={setStatus} />
+          </div>
+        }
       >
         {campaigns.loading && !campaigns.data ? (
           <Loading text="Loading campaign statistics\u2026" />
@@ -133,6 +166,24 @@ export default function StatisticsPage() {
           <table className="table">
             <thead>
               <tr>
+                <th aria-label="Select for comparison">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all for comparison"
+                    checked={rows.length > 0 && rows.every((c) => compareIds.includes(c.campaign_id))}
+                    onChange={(e) => {
+                      const next = e.target.checked ? rows.map((c) => c.campaign_id) : [];
+                      setCompareIds((prev) => {
+                        const keep = compareIds.filter(
+                          (id) => !rows.some((c) => c.campaign_id === id),
+                        );
+                        return e.target.checked
+                          ? [...new Set([...keep, ...next])]
+                          : keep;
+                      });
+                    }}
+                  />
+                </th>
                 <th>Campaign</th>
                 <th>Status</th>
                 <th>Period</th>
@@ -153,6 +204,14 @@ export default function StatisticsPage() {
                     key={c.campaign_id}
                     className={c.status === "active" ? "row-active" : undefined}
                   >
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label="Select for comparison"
+                        checked={compareIds.includes(c.campaign_id)}
+                        onChange={() => toggleCompare(c.campaign_id)}
+                      />
+                    </td>
                     <td className="small">
                       <Link className="table-link" href={`/statistics/${c.campaign_id}`}>
                         {campaignDisplayName(c.name, c.campaign_id)}

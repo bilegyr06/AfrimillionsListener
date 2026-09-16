@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import StatusPill from "@/components/status-pill";
+import { CustomerDrilldown } from "@/components/statistics/customer-drilldown";
 import CampaignReport from "@/components/statistics/campaign-report";
 import { CampaignSelect } from "@/components/statistics/campaign-select";
 import StatSection from "@/components/statistics/section";
@@ -104,6 +105,8 @@ export default function CampaignStatisticsPage() {
       >
         <CampaignReport detail={stats.data} />
       </StatSection>
+
+      <CustomerDrilldown campaignId={campaignId} />
     </div>
   );
 }

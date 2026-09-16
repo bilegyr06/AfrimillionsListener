@@ -698,21 +698,53 @@ def get_campaign_stats(campaign_id: int) -> dict:
 
 
 def list_campaign_customers(campaign_id: int, limit: int = 50, offset: int = 0) -> list[dict]:
-    """Paged per-customer view of a campaign (opportunities + their outcome)."""
+    """Paged per-customer view of a campaign (opportunities + their outcome).
+
+    Each row adds the delivery status of that accepted SMS and the customer's
+    qualifying activity inside the campaign attribution window (attributed to
+    the window the same way conversion is): qualifying play count, attributed
+    play amount, and distinct games played. The play sub-aggregate is computed
+    once per campaign, so pagination never rescans the plays table per row.
+    """
     conn = get_connection()
+    end = conn.execute(
+        "SELECT ended_at FROM welcome_campaigns WHERE id = ?", (campaign_id,)
+    ).fetchone()
+    if end is None:
+        conn.close()
+        return []
+    window_end = end["ended_at"] or datetime.now(timezone.utc).isoformat()
     rows = conn.execute(
         """
+        WITH per_user_play AS (
+            SELECT p.user_id,
+                   COUNT(p.id) AS qualifying_plays,
+                   COALESCE(SUM(p.amount), 0) AS attributed_amount,
+                   COUNT(DISTINCT p.game_name) AS games_played
+            FROM plays p
+            JOIN (SELECT user_id, MIN(sent_at) AS first_sent_at
+                  FROM welcome_interventions
+                  WHERE campaign_id = ? GROUP BY user_id) c ON c.user_id = p.user_id
+            WHERE p.played_at > c.first_sent_at AND p.played_at <= ?
+            GROUP BY p.user_id
+        )
         SELECT o.user_id, o.first_name, o.phone_raw, o.phone_normalized,
                o.login_at, o.status AS opportunity_status,
                i.status AS intervention_status, i.sent_at, i.play_at,
-               i.response_seconds
+               i.response_seconds,
+               s.status AS delivery_status,
+               COALESCE(pu.qualifying_plays, 0) AS qualifying_plays,
+               COALESCE(pu.attributed_amount, 0) AS attributed_amount,
+               COALESCE(pu.games_played, 0) AS games_played
         FROM welcome_opportunities o
         LEFT JOIN welcome_interventions i ON i.opportunity_id = o.id
+        LEFT JOIN sms_log s ON s.message_id = i.message_id
+        LEFT JOIN per_user_play pu ON pu.user_id = o.user_id
         WHERE o.campaign_id = ?
         ORDER BY o.login_at DESC
         LIMIT ? OFFSET ?
         """,
-        (campaign_id, limit, offset),
+        (campaign_id, window_end, campaign_id, limit, offset),
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
@@ -1447,6 +1479,25 @@ def get_campaign_game_stats(campaign_id: int, window_end: str, limit: int = 10) 
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def get_campaign_game_count(campaign_id: int, window_end: str) -> int:
+    """Distinct games with at least one qualifying play in the window."""
+    conn = get_connection()
+    row = conn.execute(
+        """
+        WITH contact AS (
+            SELECT user_id, MIN(sent_at) AS first_sent_at
+            FROM welcome_interventions WHERE campaign_id = ? GROUP BY user_id
+        )
+        SELECT COUNT(DISTINCT p.game_name) AS game_count
+        FROM plays p JOIN contact c ON c.user_id = p.user_id
+        WHERE p.played_at > c.first_sent_at AND p.played_at <= ?
+        """,
+        (campaign_id, window_end),
+    ).fetchone()
+    conn.close()
+    return row["game_count"]
 
 
 def get_campaign_play_edges(campaign_id: int, window_end: str) -> dict:

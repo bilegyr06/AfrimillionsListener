@@ -52,6 +52,12 @@ class CampaignStartRequest(BaseModel):
     name: str | None = Field(None, max_length=200, description="Optional campaign label")
 
 
+class CampaignCompareRequest(BaseModel):
+    campaign_ids: list[int] = Field(
+        ..., min_length=1, max_length=10, description="Campaigns to compare (descriptive metrics only)"
+    )
+
+
 class SettingsUpdateRequest(BaseModel):
     key: str = Field(..., description="Setting key from the settings registry")
     value: str = Field(..., description="New value as a string")
@@ -287,27 +293,28 @@ def stats_campaign_detail(
     return stats
 
 
-_BALANCE_CACHE_TTL = 12.0  # seconds; shared by all open dashboard tabs so a
-# dozen viewers cause ONE upstream Termii call instead of a dozen per poll.
+@app.post("/stats/campaigns/compare")
+def stats_campaigns_compare(req: CampaignCompareRequest):
+    """Descriptive comparison of selected campaigns, in the requested order.
 
-
-async def get_balance_cached() -> dict | None:
-    """Live Termii balance behind a short TTL so the dashboard poll loop and
-    several open dashboard tabs share a single upstream call. get_balance()
-    itself is deliberately untouched and remains the only real Termii caller."""
-    global _balance_cache, _balance_cache_at
-    now = time.monotonic()
-    if _balance_cache is not None and (now - _balance_cache_at) < _BALANCE_CACHE_TTL:
-        return _balance_cache
-    info = await get_balance_cached()
-    if info is not None:
-        _balance_cache = info
-        _balance_cache_at = time.monotonic()
-    return _balance_cache
+    Deliberately presentation-neutral: the rows are comparable facts (contacted,
+    conversion rate, response time, qualifying plays, attributed play amount,
+    SMS cost, cost per conversion, activity/cost ratio). No "best campaign"
+    score or winner/loser ranking is produced - interpretation is the
+    operator's job.
+    """
+    summaries = {s["campaign_id"]: s for s in campaign_summaries(limit=1000)}
+    return [summaries[cid] for cid in req.campaign_ids if cid in summaries]
 
 
 @app.get("/stats/balance")
 async def stats_balance():
+    """Live Termii balance (never stale).
+
+    The dashboard polls this every ~15s and owns its own freshness/error
+    rendering, so each request reports the provider's current state instead of
+    a cached snapshot.
+    """
     info = await get_balance()
     if info is None:
         return {"message": "Failed to retrieve balance from Termii."}

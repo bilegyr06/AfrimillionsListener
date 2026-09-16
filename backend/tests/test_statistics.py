@@ -22,10 +22,12 @@ os.environ.setdefault("TERMII_SENDER_ID", "TestSender")
 from fastapi.testclient import TestClient
 
 from app.db.database import (
+    count_campaign_customers,
     create_campaign,
     create_intervention,
     get_connection,
     insert_play_records,
+    list_campaign_customers,
     log_sms,
     record_intervention_response,
     update_opportunity_status,
@@ -277,6 +279,12 @@ class TestCampaignStatisticsService:
             "avg_cost_per_accepted": pytest.approx(0.9),
             "cost_per_contacted": pytest.approx(0.9),
             "cost_per_conversion": pytest.approx(1.8),
+            # No plays are persisted, so play-amount economics are genuine
+            # zeros (both denominators exist), not None.
+            "total_play_amount": pytest.approx(0.0),
+            "play_amount_per_converted": pytest.approx(0.0),
+            "play_amount_per_contacted": pytest.approx(0.0),
+            "activity_cost_ratio": pytest.approx(0.0),
         }
 
     def test_unknown_campaign_is_none(self, stats_fixture):
@@ -317,8 +325,14 @@ class TestCampaignStatisticsService:
         assert row["response"]["avg_response_seconds"] == pytest.approx(3900.0)
         assert row["response"]["still_pending"] == 1
         assert row["economics"] == {
+            "sms_cost": pytest.approx(3.6),
+            "avg_cost_per_accepted": pytest.approx(0.9),
             "cost_per_contacted": pytest.approx(0.9),
             "cost_per_conversion": pytest.approx(1.8),
+            "total_play_amount": pytest.approx(0.0),
+            "play_amount_per_converted": pytest.approx(0.0),
+            "play_amount_per_contacted": pytest.approx(0.0),
+            "activity_cost_ratio": pytest.approx(0.0),
         }
 
 
@@ -593,6 +607,137 @@ class TestActivityAndGamesGroups:
         assert by_name["Aviator"]["avg_amount"] == pytest.approx(12.5)
         assert by_name["Mines"]["amount"] == pytest.approx(5.0)
         assert by_name["Mines"]["avg_amount"] == pytest.approx(5.0)
+
+
+class TestCampaignEconomicsAndDrilldown:
+    """Phase 3: campaign economics, game_count, and the customer drill-down."""
+
+    def _campaign_with_activity(self) -> dict:
+        campaign = _start_campaign()
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_intervention(campaign["id"], "u2", "m_2")
+        _seed_intervention(campaign["id"], "u3", "m_3")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+        _seed_delivery("m_2", "u2", "delivered", 0.9)
+        _seed_delivery("m_3", "u3", "delivered", 0.9)
+        _respond(campaign["id"], "m_1", 600)
+
+        _seed_play("u1", "Aviator", 10, "2026-01-02T09:00:00+00:00")
+        _seed_play("u1", "Aviator", 20, "2026-01-02T10:00:00+00:00")
+        _seed_play("u1", "Mines", 30, "2026-01-02T11:00:00+00:00")
+        _seed_play("u2", "Mines", 5, "2026-01-02T09:30:00+00:00")
+        return campaign
+
+    def test_economics_use_attributed_play_amount(self, _init_db):
+        campaign = self._campaign_with_activity()
+        economics = campaign_statistics(campaign["id"])["economics"]
+        assert economics == {
+            "sms_cost": pytest.approx(2.7),
+            "avg_cost_per_accepted": pytest.approx(0.9),
+            "cost_per_contacted": pytest.approx(0.9),
+            "cost_per_conversion": pytest.approx(2.7),
+            "total_play_amount": pytest.approx(65.0),
+            "play_amount_per_converted": pytest.approx(65.0),
+            "play_amount_per_contacted": pytest.approx(21.67),
+            "activity_cost_ratio": pytest.approx(24.07),
+        }
+
+    def test_economics_zero_cost_ratio_is_none(self, _init_db):
+        # Deferred sends are charged 0.0: the cost denominator is zero even
+        # though an intervention exists, so the ratio is None, not infinity.
+        campaign = _start_campaign()
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_delivery("m_1", "u1", "deferred", 0.0)
+
+        economics = campaign_statistics(campaign["id"])["economics"]
+        assert economics["sms_cost"] == pytest.approx(0.0)
+        assert economics["cost_per_contacted"] == pytest.approx(0.0)
+        assert economics["cost_per_conversion"] is None
+        assert economics["activity_cost_ratio"] is None
+
+    def test_game_count_from_persisted_plays(self, _init_db):
+        campaign = self._campaign_with_activity()
+        activity = campaign_statistics(campaign["id"])["activity"]
+        assert activity["game_count"] == 2  # Aviator + Mines
+
+    def test_game_count_scoped_inside_closed_window(self, _init_db):
+        campaign = _start_campaign(closed=True)
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+        _seed_play("u1", "Aviator", 10, "2026-01-03T00:00:00+00:00")  # inside
+        _seed_play("u1", "Roulette", 5, "2026-01-06T00:00:00+00:00")  # after end
+
+        activity = campaign_statistics(campaign["id"])["activity"]
+        assert activity["game_count"] == 1
+
+    def test_customer_drilldown_enriched(self, _init_db):
+        campaign = self._campaign_with_activity()
+        _seed_opportunity(campaign["id"], "u4", "created")
+
+        rows = list_campaign_customers(campaign["id"], limit=10, offset=0)
+        by_user = {r["user_id"]: r for r in rows}
+        assert count_campaign_customers(campaign["id"]) == 4
+
+        u1 = by_user["u1"]
+        assert u1["delivery_status"] == "delivered"
+        assert u1["intervention_status"] == "responded"
+        assert u1["qualifying_plays"] == 3
+        assert u1["attributed_amount"] == pytest.approx(60.0)
+        assert u1["games_played"] == 2
+
+        u2 = by_user["u2"]
+        assert u2["delivery_status"] == "delivered"
+        assert u2["qualifying_plays"] == 1
+        assert u2["attributed_amount"] == pytest.approx(5.0)
+        assert u2["games_played"] == 1
+
+        u4 = by_user["u4"]
+        assert u4["delivery_status"] is None
+        assert u4["intervention_status"] is None
+        assert u4["qualifying_plays"] == 0
+        assert u4["attributed_amount"] == 0.0
+        assert u4["games_played"] == 0
+
+    def test_customer_endpoint_paginates_with_new_fields(self, stats_fixture):
+        client = TestClient(app)
+        campaign_id = stats_fixture["campaign"]["id"]
+        r = client.get(f"/campaign/{campaign_id}/customers", params={"page_size": 5})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["total"] == 10
+        assert "delivery_status" in data["items"][0]
+        assert "qualifying_plays" in data["items"][0]
+        assert "attributed_amount" in data["items"][0]
+        assert "games_played" in data["items"][0]
+
+    def test_compare_endpoint_descriptive_in_requested_order(self, _init_db):
+        client = TestClient(app)
+        a = create_campaign("Compare A")["campaign"]
+        b = create_campaign("Compare B")["campaign"]
+        _seed_intervention(a["id"], "u1", "m_1")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+        _seed_play("u1", "Aviator", 10, "2026-01-02T09:00:00+00:00")
+        _seed_intervention(b["id"], "u2", "m_2")
+        _seed_delivery("m_2", "u2", "delivered", 0.9)
+
+        r = client.post(
+            "/stats/campaigns/compare",
+            json={"campaign_ids": [b["id"], a["id"]]},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert [row["campaign_id"] for row in body] == [b["id"], a["id"]]
+        # b has cost but no plays -> genuine 0.0 ratio, not None.
+        assert body[0]["economics"]["activity_cost_ratio"] == pytest.approx(0.0)
+        assert body[1]["economics"]["activity_cost_ratio"] == pytest.approx(11.11)
+
+    def test_compare_endpoint_requires_campaigns(self, _init_db):
+        client = TestClient(app)
+        assert client.post("/stats/campaigns/compare", json={"campaign_ids": []}).status_code == 422
+        too_many = list(range(11))
+        assert (
+            client.post("/stats/campaigns/compare", json={"campaign_ids": too_many}).status_code == 422
+        )
 
 
 class TestCampaignStates:
