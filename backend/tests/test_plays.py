@@ -187,21 +187,27 @@ class TestPlaysSchemaAndIngestion:
         assert _count_plays() == 1
 
     def test_cumulative_files_do_not_duplicate(self, _init_db):
+        # The overlap rows must be byte-identical between the two files for the
+        # dedup to be meaningful, so their CSV timestamps are computed ONCE from
+        # a single base instant and reused. Regenerating them per file would
+        # let a wall-clock second boundary between the two writes change the
+        # source keys and make the test flaky.
+        base = _now().replace(microsecond=0)
+        overlap = [
+            ("1", "Aviator", 10, _slug(base - timedelta(hours=6))),
+            ("1", "Mines", 5, _slug(base - timedelta(hours=5))),
+            ("1", "Mines", 5, _slug(base - timedelta(hours=4))),
+        ]
         _write_sales(
             settings_data_dir(),
-            [("1", "Aviator", 10, _slug(_ago(6))),
-             ("1", "Mines", 5, _slug(_ago(5))),
-             ("1", "Mines", 5, _slug(_ago(4)))],
+            overlap,
             name="Sales_a.csv",
         )
         first = ingest_new_sales_files()
         # Overlapping cumulative export re-ships the same rows plus one new one.
         _write_sales(
             settings_data_dir(),
-            [("1", "Aviator", 10, _slug(_ago(6))),
-             ("1", "Mines", 5, _slug(_ago(5))),
-             ("1", "Mines", 5, _slug(_ago(4))),
-             ("1", "Aviator", 20, _slug(_ago(3)))],
+            [*overlap, ("1", "Aviator", 20, _slug(base - timedelta(hours=3)))],
             name="Sales_b.csv",
         )
         second = ingest_new_sales_files()
