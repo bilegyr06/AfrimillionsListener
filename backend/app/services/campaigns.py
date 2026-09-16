@@ -26,15 +26,18 @@ from app.db.database import (
     get_campaign,
     get_campaign_stats,
     get_cap_usage,
+    get_earliest_qualifying_play,
     get_last_welcome_sent,
     get_open_interventions,
     get_open_opportunities,
+    get_user_first_play_after,
     mark_opportunities_expired,
     record_intervention_response,
     update_opportunity_status,
     upsert_opportunities,
 )
-from app.services.ingestion import read_login_events, read_registrations, read_sales
+from app.services.ingestion import read_login_events, read_registrations
+from app.services.plays import ingest_new_sales_files
 from app.services.settings import build_campaign_config_snapshot
 from app.services.sms import SmsDispatcher
 
@@ -81,21 +84,6 @@ def _to_utc_series(series: pd.Series) -> pd.Series:
     else:
         parsed = parsed.dt.tz_convert("UTC")
     return parsed
-
-
-def _plays_map(sales_df: pd.DataFrame) -> dict[str, list[datetime]]:
-    """Per-user sorted lists of aware play timestamps from the Sales file."""
-    if sales_df is None or sales_df.empty:
-        return {}
-    plays = sales_df.copy()
-    plays["userId"] = plays["userId"].astype(str)
-    tss = _to_utc_series(plays["timestamp"])
-    out: dict[str, list[datetime]] = {}
-    for uid, ts in zip(plays["userId"], tss):
-        out.setdefault(str(uid), []).append(ts.to_pydatetime())
-    for key in out:
-        out[key].sort()
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +145,6 @@ def ingest_opportunities(campaign: dict, login_df: pd.DataFrame, regs_df: pd.Dat
 
 async def _evaluate_campaign(
     campaign: dict,
-    sales_df: pd.DataFrame,
     deadline: datetime,
     cycle_id: str,
 ) -> dict:
@@ -165,7 +152,7 @@ async def _evaluate_campaign(
     if not opps:
         return {"eligible": 0, "sent": 0, "failed": 0, "deferred": 0, "decisions": {}}
 
-    plays = _plays_map(sales_df)
+    now_iso = datetime.now(timezone.utc).isoformat()
     now_utc = datetime.now(timezone.utc)
     decisions = {
         status: 0
@@ -198,8 +185,7 @@ async def _evaluate_campaign(
         # Pre-dispatch re-check: any play after the sign-in (including after
         # the eval delay) disqualifies this login, so we never SMS someone who
         # already played.
-        played_after = [p for p in plays.get(opp["user_id"], []) if login_at < p <= now_utc]
-        if played_after:
+        if get_user_first_play_after(opp["user_id"], opp["login_at"], now_iso):
             update_opportunity_status(opp["id"], "disqualified_played")
             decisions["disqualified_played"] += 1
             continue
@@ -308,7 +294,6 @@ async def _send_opportunities(
 
 def _attribute_interventions(
     campaign: dict,
-    sales_df: pd.DataFrame,
     window_end: str | None = None,
 ) -> dict:
     """Attribute plays to open interventions within (sent_at, window_end].
@@ -321,20 +306,19 @@ def _attribute_interventions(
     if not opens:
         return {"open": 0, "responded": 0, "no_change": 0}
 
-    plays = _plays_map(sales_df)
     end = (
-        datetime.fromisoformat(window_end)
+        datetime.fromisoformat(window_end).isoformat()
         if window_end
-        else datetime.now(timezone.utc)
+        else datetime.now(timezone.utc).isoformat()
     )
     responded = 0
     for inv in opens:
-        sent = datetime.fromisoformat(inv["sent_at"])
-        matched = [p for p in plays.get(inv["user_id"], []) if sent < p <= end]
-        if not matched:
+        play_at = get_earliest_qualifying_play(inv["user_id"], inv["sent_at"], end)
+        if not play_at:
             continue
-        play = min(matched)
-        record_intervention_response(inv["id"], play.isoformat(), (play - sent).total_seconds())
+        play_dt = datetime.fromisoformat(play_at)
+        sent_dt = datetime.fromisoformat(inv["sent_at"])
+        record_intervention_response(inv["id"], play_at, (play_dt - sent_dt).total_seconds())
         responded += 1
 
     return {"open": len(opens), "responded": responded, "no_change": len(opens) - responded}
@@ -353,10 +337,9 @@ def finalize_campaign(campaign_id: int):
         return
 
     mark_opportunities_expired(campaign_id)
-    sales_df = read_sales()
-    if not sales_df.empty:
-        attribution = _attribute_interventions(campaign, sales_df, campaign["ended_at"])
-        print(f"Campaign #{campaign_id} final attribution: {attribution}")
+    ingest_new_sales_files()
+    attribution = _attribute_interventions(campaign, campaign["ended_at"])
+    print(f"Campaign #{campaign_id} final attribution: {attribution}")
     close_open_interventions(campaign_id)
     print(f"Campaign #{campaign_id} finalized.")
 
@@ -368,10 +351,11 @@ def finalize_campaign(campaign_id: int):
 async def run_welcome_pipeline(deadline: datetime, cycle_id: str) -> dict:
     """Feature 1: one welcome cycle against the active campaign.
 
-    Ingests every Login file overlapping the campaign window, evaluates still-
-    pending opportunities, sends to the eligible, and attributes plays to open
-    interventions. All state lives in the campaign/opportunity/intervention
-    tables; repetitions are idempotent.
+    Ingests Sales files (incremental), ingests every Login file overlapping the
+    campaign window, evaluates still-pending opportunities, sends to the
+    eligible, and attributes plays to open interventions. All state lives in
+    the campaign/opportunity/intervention/play tables; repetitions are
+    idempotent.
     """
     campaign = get_active_campaign()
     if campaign is None:
@@ -382,18 +366,19 @@ async def run_welcome_pipeline(deadline: datetime, cycle_id: str) -> dict:
             "count": 0,
         }
 
+    ingest_new_sales_files()
+
     logins_df = read_login_events()
     regs_df = read_registrations()
-    sales_df = read_sales()
 
     ingested = ingest_opportunities(campaign, logins_df, regs_df)
     print(f"Welcome: campaign #{campaign['id']} — {ingested} new login opportunity(ies).")
 
-    attribution = _attribute_interventions(campaign, sales_df)
+    attribution = _attribute_interventions(campaign)
     if attribution["responded"]:
         print(f"Welcome attribution: {attribution}")
 
-    evaluation = await _evaluate_campaign(campaign, sales_df, deadline, cycle_id)
+    evaluation = await _evaluate_campaign(campaign, deadline, cycle_id)
     print(f"Welcome evaluation: {evaluation}")
 
     return {

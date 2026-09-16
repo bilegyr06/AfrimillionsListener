@@ -276,9 +276,12 @@ def stats_campaigns(limit: int = Query(50, ge=1, le=1000)):
 
 
 @app.get("/stats/campaigns/{campaign_id}")
-def stats_campaign_detail(campaign_id: int):
+def stats_campaign_detail(
+    campaign_id: int,
+    game_limit: int = Query(10, ge=1, le=200),
+):
     """Full statistics report for a single campaign (Statistics surface)."""
-    stats = campaign_statistics(campaign_id)
+    stats = campaign_statistics(campaign_id, game_limit=game_limit)
     if stats is None:
         return JSONResponse({"message": "Campaign not found."}, status_code=404)
     return stats

@@ -137,6 +137,31 @@ def init_db():
         )
         """
     )
+    # Persistent player activity (Phase 2) - the durable source of truth for
+    # "what the customer did". welcome_interventions keeps play_at /
+    # response_seconds as a denormalized view of the campaign conversion; the
+    # plays table carries the full history (games, amounts, repeat plays).
+    #
+    # The Sales source has NO stable play/transaction identifier, so the
+    # idempotency key is derived deterministically from the source row itself:
+    # (user_id, played_at, game_name, amount). Documented assumption: identical
+    # same-second bets are indistinguishable from file duplication, and the
+    # database therefore collapses them into one play record. If a real play ID
+    # ever appears in the source, migrate source_key to it.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS plays (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            played_at TEXT NOT NULL,
+            game_name TEXT NOT NULL,
+            amount REAL NOT NULL,
+            source_file TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            source_key TEXT NOT NULL UNIQUE
+        )
+        """
+    )
     _ensure_column(conn, "pending_queue", "kind", "TEXT NOT NULL DEFAULT 'inactive'")
     _ensure_column(conn, "pending_queue", "last_login_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "welcome_campaigns", "config", "TEXT")
@@ -170,6 +195,19 @@ def init_db():
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_sms_kind_status_sent "
         "ON sms_log (kind, status, sent_at)"
+    )
+    # plays coverage for attribution (user + played_at range scans), time-series
+    # scoping, and game aggregation. source_key is unique via the table
+    # constraint (its backing index serves dedup lookups).
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_plays_user_played "
+        "ON plays (user_id, played_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_plays_played_at ON plays (played_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_plays_game ON plays (game_name)"
     )
     conn.commit()
     conn.close()
@@ -1251,5 +1289,286 @@ def update_file_outcome(file_id: int, status: str, *, row_count: int | None = No
         "WHERE id = ?",
         (status, row_count, parse_error, now, file_id),
     )
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Persistent player activity (Phase 2)
+# ---------------------------------------------------------------------------
+#
+# All campaign statistics build on these aggregations; nothing pulls per-play
+# rows into the UI. Attribute-time strings are stored as UTC-aware ISO
+# ("...+00:00"), lexicographically comparable with every other timestamp the
+# app stores.
+
+def insert_play_records(records: list[dict]) -> int:
+    """Idempotently insert play records; returns rows actually inserted.
+
+    Dedup is enforced by the plays.source_key UNIQUE constraint, so re-running
+    the same (or a cumulative overlapping) Sales export never duplicates plays.
+    records keys: user_id, played_at, game_name, amount, source_file, source_key.
+    """
+    if not records:
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    cur = conn.executemany(
+        """
+        INSERT OR IGNORE INTO plays
+            (user_id, played_at, game_name, amount, source_file, created_at, source_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                r["user_id"],
+                r["played_at"],
+                r["game_name"],
+                r["amount"],
+                r["source_file"],
+                now,
+                r["source_key"],
+            )
+            for r in records
+        ],
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount
+
+
+def get_user_first_play_after(user_id: str, after_iso: str, until_iso: str) -> str | None:
+    """Earliest play strictly after `after_iso` up to `until_iso`, or None."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT played_at FROM plays "
+        "WHERE user_id = ? AND played_at > ? AND played_at <= ? "
+        "ORDER BY played_at LIMIT 1",
+        (user_id, after_iso, until_iso),
+    ).fetchone()
+    conn.close()
+    return row["played_at"] if row else None
+
+
+def get_earliest_qualifying_play(user_id: str, sent_at: str, window_end: str) -> str | None:
+    """Earliest play in (sent_at, window_end] - the first qualifying play.
+
+    Mirrors the historical attribution rule verbatim: min(plays where
+    sent_at < played_at <= window_end). window_end is ended_at for a closed
+    campaign or the current instant while it is active.
+    """
+    return get_user_first_play_after(user_id, sent_at, window_end)
+
+
+def get_contact_first_sent(campaign_id: int) -> list[dict]:
+    """Per contacted customer: their first Welcome SMS sent time in a campaign.
+
+    The campaign window opens at each customer's first accepted SMS in that
+    campaign, so a customer's plays are attributed exactly once even when a
+    single customer has several logins (and thus several interventions).
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT user_id, MIN(sent_at) AS first_sent_at "
+        "FROM welcome_interventions WHERE campaign_id = ? GROUP BY user_id",
+        (campaign_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_converted_customers(campaign_id: int) -> set[str]:
+    """Distinct customers with a responded intervention in the campaign."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT DISTINCT user_id FROM welcome_interventions "
+        "WHERE campaign_id = ? AND status = 'responded'",
+        (campaign_id,),
+    ).fetchall()
+    conn.close()
+    return {str(row["user_id"]) for row in rows}
+
+
+def get_campaign_play_stats(campaign_id: int, window_end: str) -> list[dict]:
+    """Per-customer qualifying-play counts and amounts for a campaign.
+
+    A play qualifies when it falls inside the campaign's attribution window:
+    strictly after the customer's first accepted Welcome SMS and at or before
+    `window_end`. Rows are grouped per customer so aggregation over converted /
+    contacted splits stays a constant-size operation.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        WITH contact AS (
+            SELECT user_id, MIN(sent_at) AS first_sent_at
+            FROM welcome_interventions
+            WHERE campaign_id = ?
+            GROUP BY user_id
+        )
+        SELECT p.user_id,
+               COUNT(*) AS play_count,
+               COALESCE(SUM(p.amount), 0) AS amount
+        FROM plays p
+        JOIN contact c ON c.user_id = p.user_id
+        WHERE p.played_at > c.first_sent_at AND p.played_at <= ?
+        GROUP BY p.user_id
+        """,
+        (campaign_id, window_end),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_campaign_game_stats(campaign_id: int, window_end: str, limit: int = 10) -> list[dict]:
+    """Qualifying activity grouped by game, most-played first (bounded)."""
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        WITH contact AS (
+            SELECT user_id, MIN(sent_at) AS first_sent_at
+            FROM welcome_interventions
+            WHERE campaign_id = ?
+            GROUP BY user_id
+        )
+        SELECT p.game_name,
+               COUNT(*) AS plays,
+               COUNT(DISTINCT p.user_id) AS customers,
+               COALESCE(SUM(p.amount), 0) AS amount
+        FROM plays p
+        JOIN contact c ON c.user_id = p.user_id
+        WHERE p.played_at > c.first_sent_at AND p.played_at <= ?
+        GROUP BY p.game_name
+        ORDER BY plays DESC, amount DESC, game_name
+        LIMIT ?
+        """,
+        (campaign_id, window_end, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_campaign_play_edges(campaign_id: int, window_end: str) -> dict:
+    """Before/outside activity of a campaign's contacted customers.
+
+    `before_sms` counts plays that did NOT follow a campaign Welcome SMS
+    (played_at <= first sent); `after_end` counts plays beyond the attribution
+    window. These are contextual, never conversion data.
+    """
+    conn = get_connection()
+    row = conn.execute(
+        """
+        WITH contact AS (
+            SELECT user_id, MIN(sent_at) AS first_sent_at
+            FROM welcome_interventions
+            WHERE campaign_id = ?
+            GROUP BY user_id
+        )
+        SELECT
+            (SELECT COUNT(*) FROM plays p JOIN contact c ON c.user_id = p.user_id
+             WHERE p.played_at <= c.first_sent_at) AS before_sms,
+            (SELECT COUNT(*) FROM plays p JOIN contact c ON c.user_id = p.user_id
+             WHERE p.played_at > ?) AS after_end
+        """,
+        (campaign_id, window_end),
+    ).fetchone()
+    conn.close()
+    return dict(row)
+
+
+def get_campaigns_play_summary(window_end: str) -> dict[int, dict]:
+    """Qualifying-activity aggregates for every campaign, keyed by campaign_id.
+
+    `window_end` is the "now" instant used for still-active campaigns (closed
+    campaigns scope to their own ended_at).
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        WITH contact AS (
+            SELECT campaign_id, user_id, MIN(sent_at) AS first_sent_at
+            FROM welcome_interventions
+            GROUP BY campaign_id, user_id
+        )
+        SELECT c.id AS campaign_id,
+               COUNT(p.id) AS qualifying_plays,
+               COUNT(DISTINCT p.user_id) AS players,
+               COALESCE(SUM(p.amount), 0) AS total_amount
+        FROM welcome_campaigns c
+        LEFT JOIN contact k ON k.campaign_id = c.id
+        LEFT JOIN plays p ON p.user_id = k.user_id
+            AND p.played_at > k.first_sent_at
+            AND p.played_at <= COALESCE(c.ended_at, ?)
+        GROUP BY c.id
+        """,
+        (window_end,),
+    ).fetchall()
+    conn.close()
+    return {
+        row["campaign_id"]: {
+            "qualifying_plays": row["qualifying_plays"],
+            "players": row["players"],
+            "total_amount": round(row["total_amount"], 2),
+        }
+        for row in rows
+    }
+
+
+def sales_file_processed(stored_filename: str) -> bool:
+    """Whether a Sales file has already been fully ingested into plays."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM files WHERE dataset = 'Sales' "
+        "AND stored_filename = ? AND status = 'processed'",
+        (stored_filename,),
+    ).fetchone()
+    conn.close()
+    return row["n"] > 0
+
+
+def mark_plays_ingested(stored_filename: str, report: dict, uploaded_by: str | None = None):
+    """Record that a Sales file was ingested (ledger row upsert).
+
+    The files table doubles as the ingestion ledger: manual uploads already
+    have a row (status 'succeeded' written at accept time), which is promoted
+    to 'processed'; generic/auto files get a new 'processed' row. row_count
+    records inserted plays; parse_error carries the rejection summary.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    summary = (
+        f"inserted {report.get('inserted', 0)}; "
+        f"duplicates {report.get('skipped', 0)}; "
+        f"invalid {report.get('invalid', 0)}; "
+        f"parse_errors {report.get('parse_errors', 0)}"
+    )
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT id FROM files WHERE dataset = 'Sales' AND stored_filename = ?",
+        (stored_filename,),
+    ).fetchone()
+    if row:
+        conn.execute(
+            "UPDATE files SET status = 'processed', row_count = ?, "
+            "parse_error = ?, processed_at = ? WHERE id = ?",
+            (report.get("inserted", 0), summary, now, row["id"]),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO files
+                (original_filename, stored_filename, dataset, uploaded_at,
+                 uploaded_by, status, row_count, parse_error, processed_at)
+            VALUES (?, ?, 'Sales', ?, ?, 'processed', ?, ?, ?)
+            """,
+            (
+                stored_filename,
+                stored_filename,
+                now,
+                uploaded_by,
+                report.get("inserted", 0),
+                summary,
+                now,
+            ),
+        )
     conn.commit()
     conn.close()

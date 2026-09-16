@@ -14,14 +14,22 @@ Terminology is strict and stable:
   delivered             accepted sends whose Termii status is 'delivered'
   converted_customers   distinct user_id with a responded intervention
   conversion_events     responded interventions. Each is a customer's *first*
-                        qualifying play; repeated plays are not stored yet, so
-                        this is not a total play count.
+                        qualifying play.
   conversion_rate       converted customers / contacted customers (0.0 valid)
   cost_per_contacted    total SMS cost / distinct contacted customers
   cost_per_conversion   total SMS cost / distinct converted customers
   qualifying_plays      every customer play inside the attribution window.
-                        Requires play-level persistence (Phase 2); reported as
-                        None for now.
+                        Requires play-level persistence (the plays table); the
+                        activity group below is the total-play-volume view.
+  players               distinct customers with at least one qualifying play
+  repeat_players        distinct players with two or more qualifying plays
+
+The attribution window opens at a customer's first accepted Welcome SMS in the
+campaign (per-campaign first sent_at) and closes at ended_at for closed
+campaigns or the instant the report is built while active. A play qualifies
+when it lies strictly inside that window; plays at or before the SMS are never
+converted, and plays after a closed campaign's ended_at are reported as
+after-window context.
 
 Money/rate convention: a rate or unit cost whose denominator is zero is
 reported as None ("unavailable"), never as a misleading 0.0. Plain counts such
@@ -29,16 +37,23 @@ as converted_customers and conversion_rate genuinely are zero and report 0.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.core.models import WELCOME
 from app.db.database import (
     get_campaign,
     get_campaign_audience,
+    get_campaign_game_stats,
     get_campaign_intervention_counts,
+    get_campaign_play_edges,
+    get_campaign_play_stats,
     get_campaign_response_plays,
     get_campaign_sms_funnel,
     get_campaigns_audience,
     get_campaigns_interventions,
+    get_campaigns_play_summary,
     get_campaigns_sms_funnel,
+    get_converted_customers,
     list_campaigns,
 )
 
@@ -119,12 +134,72 @@ def _response_metrics(plays: list[dict]) -> dict:
     }
 
 
-def campaign_statistics(campaign_id: int) -> dict | None:
+def _activity_metrics(
+    play_stats: list[dict],
+    converted: set[str],
+    edges: dict,
+) -> dict:
+    """Play-volume aggregates over per-customer qualifying-play rows.
+
+    play_stats is one row per engaged customer ({user_id, play_count, amount}),
+    so the arithmetic below is constant-size regardless of play volume.
+    Per-customer rates keep the zero-denominator -> None convention; plain
+    counts are genuine zeros.
+    """
+    players = len(play_stats)
+    qualifying_plays = sum(int(r["play_count"]) for r in play_stats)
+    repeat_players = sum(1 for r in play_stats if int(r["play_count"]) >= 2)
+    converted_players = sum(1 for r in play_stats if r["user_id"] in converted)
+    total_amount = round(sum(float(r["amount"]) for r in play_stats), 2)
+    max_plays = max((int(r["play_count"]) for r in play_stats), default=0)
+    return {
+        "qualifying_plays": qualifying_plays,
+        "players": players,
+        "repeat_players": repeat_players,
+        "converted_players": converted_players,
+        "avg_plays_per_player": (
+            round(qualifying_plays / players, 2) if players else None
+        ),
+        "repeat_rate": round(repeat_players / players, 4) if players else None,
+        "max_plays_per_player": max_plays,
+        "total_play_amount": total_amount,
+        "avg_play_amount": (
+            round(total_amount / qualifying_plays, 2) if qualifying_plays else None
+        ),
+        "before_sms": int(edges.get("before_sms", 0)),
+        "after_window": int(edges.get("after_end", 0)),
+    }
+
+
+def _attribution_end(campaign: dict) -> str:
+    """ISO instant to which a campaign's qualifying window extends."""
+    if campaign.get("ended_at"):
+        return campaign["ended_at"]
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _activity_group(campaign: dict, game_limit: int = 10) -> dict:
+    """The persistent activity + per-game projection for one campaign."""
+    window_end = _attribution_end(campaign)
+    play_stats = get_campaign_play_stats(campaign["id"], window_end)
+    converted = get_converted_customers(campaign["id"])
+    edges = get_campaign_play_edges(campaign["id"], window_end)
+    games = get_campaign_game_stats(campaign["id"], window_end, limit=game_limit)
+    return {
+        "window_end": window_end,
+        "metrics": _activity_metrics(play_stats, converted, edges),
+        "games": games,
+    }
+
+
+def campaign_statistics(campaign_id: int, game_limit: int = 10) -> dict | None:
     """Full statistics report for a single campaign (None if it does not exist).
 
     The report is a pure projection of the database state: no campaign is ever
     auto-created here, and attribution follows the existing rules unchanged
     (first qualifying play after acceptance, within the campaign window).
+    game_limit bounds the included per-game ranking (the games list is the only
+    play-level data the report carries).
     """
     campaign = get_campaign(campaign_id)
     if campaign is None:
@@ -134,6 +209,7 @@ def campaign_statistics(campaign_id: int) -> dict | None:
     interventions = get_campaign_intervention_counts(campaign_id)
     funnel = get_campaign_sms_funnel(campaign_id)
     response = _response_metrics(get_campaign_response_plays(campaign_id))
+    activity = _activity_group(campaign, game_limit=game_limit)
 
     contacted = interventions["contacted_customers"]
     converted = interventions["converted_customers"]
@@ -216,14 +292,9 @@ def campaign_statistics(campaign_id: int) -> dict | None:
             "first_qualifying_play_at": response["first_qualifying_play_at"],
             "time_to_first_play": response["time_to_first_play"],
             "buckets": response["buckets"],
-            "qualifying_plays": None,
-            "qualifying_plays_note": (
-                "Total qualifying plays per customer require play-level "
-                "persistence (Phase 2). Today only each customer's first "
-                "qualifying play is stored, so conversion events are a lower "
-                "bound on play volume."
-            ),
         },
+        "activity": {**activity["metrics"], "window_end": activity["window_end"]},
+        "games": activity["games"],
         "economics": {
             "sms_cost": round(funnel["cost"], 2),
             "avg_cost_per_accepted": avg_cost,
@@ -243,6 +314,9 @@ def campaign_summaries(limit: int = 50) -> list[dict]:
     audience_map = get_campaigns_audience()
     interventions_map = get_campaigns_interventions()
     funnel_map = get_campaigns_sms_funnel()
+    play_summary_map = get_campaigns_play_summary(
+        datetime.now(timezone.utc).isoformat()
+    )
 
     summaries: list[dict] = []
     for campaign in list_campaigns(limit):
@@ -262,6 +336,10 @@ def campaign_summaries(limit: int = 50) -> list[dict]:
         funnel = funnel_map.get(
             campaign_id,
             {"accepted": 0, "contacted_customers": 0, "delivered": 0, "deferred": 0, "cost": 0},
+        )
+        plays = play_summary_map.get(
+            campaign_id,
+            {"qualifying_plays": 0, "players": 0, "total_amount": 0.0},
         )
         contacted = interventions["contacted_customers"]
         converted = interventions["converted_customers"]
@@ -291,6 +369,11 @@ def campaign_summaries(limit: int = 50) -> list[dict]:
                     "conversion_rate": rate,
                     "avg_response_seconds": interventions["avg_response_seconds"],
                     "still_pending": interventions["still_open"],
+                },
+                "activity": {
+                    "qualifying_plays": int(plays["qualifying_plays"]),
+                    "players": int(plays["players"]),
+                    "total_play_amount": round(float(plays["total_amount"]), 2),
                 },
                 "economics": {
                     "cost_per_contacted": round(cost / contacted, 2) if contacted else None,
