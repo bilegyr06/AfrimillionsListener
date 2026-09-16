@@ -137,6 +137,7 @@ export default function StatisticsPage() {
                 <th>Status</th>
                 <th>Period</th>
                 <th>Targeted</th>
+                <th>Plays</th>
                 <th>Accepted</th>
                 <th>Delivered</th>
                 <th>Converted</th>
@@ -170,6 +171,12 @@ export default function StatisticsPage() {
                       title={`${c.audience.opportunities} opportunities \u00b7 ${c.audience.unique_customers} unique customers`}
                     >
                       {formatNumber(c.audience.unique_customers)}
+                    </td>
+                    <td
+                      className="small num"
+                      title={`${c.activity.total_play_amount.toLocaleString()} amount`}
+                    >
+                      {formatNumber(c.activity.qualifying_plays)}
                     </td>
                     <td className="small num">{formatNumber(c.sms.accepted)}</td>
                     <td className="small num">{formatNumber(c.sms.delivered)}</td>

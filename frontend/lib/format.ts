@@ -55,6 +55,13 @@ export function formatPercent(rate: number | null | undefined): string {
   return `${(rate * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
 }
 
+// For unit-cost-style ratios with at most two decimals (e.g. avg plays per
+// player) where whole-number rounding would hide the ratio.
+export function formatRatio(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
 export function formatDuration(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined) return "—";
   if (seconds < 60) return `${Math.round(seconds)}s`;

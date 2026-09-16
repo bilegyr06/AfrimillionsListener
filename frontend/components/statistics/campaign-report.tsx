@@ -15,7 +15,14 @@ import {
 } from "@/components/statistics/metric";
 import StatSection from "@/components/statistics/section";
 import { Empty } from "@/components/state-ui";
-import { formatDateTime, formatDuration, formatMoney, formatNumber, formatPercent } from "@/lib/format";
+import {
+  formatDateTime,
+  formatDuration,
+  formatMoney,
+  formatNumber,
+  formatPercent,
+  formatRatio,
+} from "@/lib/format";
 import { buildStatisticsSnapshot, snapshotFilename } from "@/lib/snapshot";
 import type { CampaignStatisticsDetail } from "@/lib/types";
 
@@ -39,7 +46,8 @@ const NOT_SENT_ROWS: Array<[string, string]> = [
 
 export default function CampaignReport({ detail }: { detail: CampaignStatisticsDetail }) {
   const [snapshotOpen, setSnapshotOpen] = useState(false);
-  const { campaign, window, audience, funnel, sms, response, economics } = detail;
+  const { campaign, window, audience, funnel, sms, response, activity, games, economics } =
+    detail;
   const timing = response.time_to_first_play;
   const attributionNote =
     campaign.status === "active"
@@ -133,9 +141,6 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
               { label: "Min \u2013 max", value: `${formatDuration(timing.min)} \u2013 ${formatDuration(timing.max)}` },
             ]}
           />
-          <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
-            {response.qualifying_plays_note}
-          </p>
         </div>
       </StatSection>
 
@@ -224,11 +229,70 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
         </div>
       </StatSection>
 
-      <StatSection title="Game activity" aside={<span className="muted small">Coming in phase 2</span>}>
-        <div className="section-body">
-          <Empty
-            text="Game-level and repeat-play breakdowns need play-level persistence (Phase 2). Play data is available locally but not yet processed into the database."
+      <StatSection title="Player activity" aside={<span className="muted small">Qualifying plays by contacted customers</span>}>
+        <div className="section-body flush">
+          <MetricStrip>
+            <Metric label="Qualifying plays" value={formatNumber(activity.qualifying_plays)} />
+            <Metric label="Players" value={formatNumber(activity.players)} accent />
+            <Metric label="Repeat players" value={formatNumber(activity.repeat_players)} accent />
+          </MetricStrip>
+          <MetricTier>
+            <Metric label="Converted players" value={formatNumber(activity.converted_players)} />
+            <Metric label="Played before SMS" value={formatNumber(activity.before_sms)} />
+            <Metric label="Played after window" value={formatNumber(activity.after_window)} />
+          </MetricTier>
+        </div>
+        <div className="section-body" style={{ paddingTop: 0 }}>
+          <KvRows
+            rows={[
+              { label: "Average plays per player", value: formatRatio(activity.avg_plays_per_player) },
+              { label: "Repeat share", value: formatPercent(activity.repeat_rate) },
+              { label: "Most plays by one player", value: formatNumber(activity.max_plays_per_player) },
+              { label: "Total play amount", value: formatMoney(activity.total_play_amount) },
+              { label: "Average amount per play", value: formatMoney(activity.avg_play_amount) },
+            ]}
           />
+          <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
+            A qualifying play lies strictly after the customer\u2019s first Welcome
+            SMS and at or before the attribution window end. Plays before the SMS
+            would have disqualified that customer\u2019s send, so they are listed
+            separately above.
+          </p>
+        </div>
+      </StatSection>
+
+      <StatSection title="Game activity" aside={<span className="muted small">Qualifying plays by game</span>}>
+        <div className="section-body flush">
+          {games.length === 0 ? (
+            <Empty text="No qualifying plays to rank." />
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Game</th>
+                  <th className="num right">Plays</th>
+                  <th className="num right">Players</th>
+                  <th className="num right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {games.map((game) => (
+                  <tr key={game.game_name}>
+                    <td className="small">{game.game_name}</td>
+                    <td className="small num right">{formatNumber(game.plays)}</td>
+                    <td className="small num right">{formatNumber(game.customers)}</td>
+                    <td className="small num right">{formatMoney(game.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div className="section-body" style={{ paddingTop: 0 }}>
+          <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
+            Ranked by plays, then by play amount. Customers of a game are the
+            distinct players who qualify in the window, not unique to one game.
+          </p>
         </div>
       </StatSection>
 

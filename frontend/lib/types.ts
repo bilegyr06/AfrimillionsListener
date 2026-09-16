@@ -293,8 +293,32 @@ export interface CampaignResponsePerformance {
   first_qualifying_play_at: string | null;
   time_to_first_play: ResponseTiming;
   buckets: Record<ResponseBucketKey, number>;
-  qualifying_plays: number | null;
-  qualifying_plays_note: string;
+}
+
+// Persistent player activity: a projection of the plays table joined onto the
+// campaign's contacted audience. A play qualifies when it lies strictly after
+// the customer's first Welcome SMS and at or before the attribution window end
+// (ended_at for closed campaigns, now while active).
+export interface CampaignActivity {
+  window_end: string;
+  qualifying_plays: number;
+  players: number;
+  repeat_players: number;
+  converted_players: number;
+  avg_plays_per_player: number | null;
+  repeat_rate: number | null;
+  max_plays_per_player: number;
+  total_play_amount: number;
+  avg_play_amount: number | null;
+  before_sms: number;
+  after_window: number;
+}
+
+export interface GameStats {
+  game_name: string;
+  plays: number;
+  customers: number;
+  amount: number;
 }
 
 export interface CampaignWindow {
@@ -330,6 +354,8 @@ export interface CampaignStatisticsDetail {
   funnel: CampaignFunnel;
   sms: CampaignSmsPerformance;
   response: CampaignResponsePerformance;
+  activity: CampaignActivity;
+  games: GameStats[];
   economics: CampaignEconomics;
 }
 
@@ -356,6 +382,11 @@ export interface CampaignStatisticsSummary {
     conversion_rate: number;
     avg_response_seconds: number | null;
     still_pending: number;
+  };
+  activity: {
+    qualifying_plays: number;
+    players: number;
+    total_play_amount: number;
   };
   economics: {
     cost_per_contacted: number | null;

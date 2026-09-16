@@ -10,6 +10,7 @@ import {
   formatMoney,
   formatNumber,
   formatPercent,
+  formatRatio,
   smsKindLabel,
 } from "@/lib/format";
 import type {
@@ -167,7 +168,8 @@ const BUCKET_LABELS: Array<[string, string]> = [
 ];
 
 export function buildStatisticsSnapshot(detail: CampaignStatisticsDetail): string {
-  const { campaign, window, audience, funnel, sms, response, economics } = detail;
+  const { campaign, window, audience, funnel, sms, response, activity, games, economics } =
+    detail;
   const lines: string[] = [];
 
   lines.push("AFRIMILLIONS LISTENER \u2014 CAMPAIGN STATISTICS REPORT");
@@ -242,6 +244,32 @@ export function buildStatisticsSnapshot(detail: CampaignStatisticsDetail): strin
   }
   lines.push("");
 
+  heading(lines, "Player activity");
+  lines.push(`  Qualifying plays             ${formatNumber(activity.qualifying_plays)}`);
+  lines.push(`  Players                      ${formatNumber(activity.players)}`);
+  lines.push(`  Repeat players               ${formatNumber(activity.repeat_players)}`);
+  lines.push(`  Converted players            ${formatNumber(activity.converted_players)}`);
+  lines.push(`  Avg plays per player         ${formatRatio(activity.avg_plays_per_player)}`);
+  lines.push(`  Repeat share                 ${formatPercent(activity.repeat_rate)}`);
+  lines.push(`  Most plays by one player     ${formatNumber(activity.max_plays_per_player)}`);
+  lines.push(`  Total play amount            ${formatMoney(activity.total_play_amount)}`);
+  lines.push(`  Average amount per play      ${formatMoney(activity.avg_play_amount)}`);
+  lines.push(`  Played before SMS            ${formatNumber(activity.before_sms)}`);
+  lines.push(`  Played after window          ${formatNumber(activity.after_window)}`);
+  lines.push("");
+
+  heading(lines, "Game activity");
+  if (games.length === 0) {
+    lines.push("  No qualifying plays to rank.");
+  } else {
+    for (const g of games) {
+      lines.push(
+        `  ${g.game_name.padEnd(20)} ${formatNumber(g.plays).padStart(6)} plays \u00b7 ${formatNumber(g.customers).padStart(4)} players \u00b7 ${formatMoney(g.amount)}`,
+      );
+    }
+  }
+  lines.push("");
+
   heading(lines, "Campaign cost");
   lines.push(`  SMS cost                    ${formatMoney(economics.sms_cost)}`);
   lines.push(`  Avg cost per accepted SMS   ${formatMoney(economics.avg_cost_per_accepted)}`);
@@ -252,8 +280,10 @@ export function buildStatisticsSnapshot(detail: CampaignStatisticsDetail): strin
   lines.push(
     "Conversion rate is converted customers divided by customers contacted (accepted",
   );
-  lines.push("Welcome SMS); 0% is a valid result. Conversion events are each customer's first");
-  lines.push("qualifying play \u2014 game-level and repeat-play statistics need play persistence.");
+  lines.push("Welcome SMS); 0% is a valid result. Conversion events are each customer\u2019s first");
+  lines.push(
+    "qualifying play \u2014 play-level breakdowns are shown under Player activity and Game activity.",
+  );
   lines.push("A \u2014 marks a rate with no base to divide by, not a zero result.");
   return lines.join("\n");
 }
