@@ -1,10 +1,12 @@
-"""Tests for the campaign statistics reporting contract (Phase 1).
+"""Tests for the campaign statistics reporting contract (Phase 1 + Phase 2).
 
 The Statistics surface (/stats/campaigns, /stats/campaigns/{id}) must always
 aggregate only in SQL and stick to the stable terminology in
 app.services.statistics: opportunities (logins) vs unique customers vs
 accepted vs contacted vs converted, with 0 as a valid rate but None for rates
-whose denominator is zero (zero vs unavailable).
+whose denominator is zero (zero vs unavailable). Phase 2 adds the persisted
+activity group (qualifying plays from the plays table) and the per-game
+ranking.
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ from app.db.database import (
     create_campaign,
     create_intervention,
     get_connection,
+    insert_play_records,
     log_sms,
     record_intervention_response,
     update_opportunity_status,
@@ -30,6 +33,7 @@ from app.db.database import (
 )
 
 from app.main import app
+from app.services.plays import play_source_key
 from app.services.statistics import campaign_statistics, campaign_summaries
 
 CAMP_START = "2026-01-01T00:00:00+00:00"
@@ -122,6 +126,20 @@ def _respond(campaign_id: int, message_id: str, seconds: float):
     conn.close()
     play_at = (datetime.fromisoformat(SENT_AT) + timedelta(seconds=seconds)).isoformat()
     record_intervention_response(row["id"], play_at, seconds)
+
+
+def _seed_play(user_id: str, game: str, amount: float, played_at: str):
+    """Persist one play row (the Phase 2 activity source)."""
+    insert_play_records([
+        {
+            "user_id": user_id,
+            "played_at": played_at,
+            "game_name": game,
+            "amount": amount,
+            "source_file": "Sales_test.csv",
+            "source_key": play_source_key(user_id, played_at, game, amount),
+        }
+    ])
 
 
 def _set_intervention_status(campaign_id: int, message_id: str, status: str):
@@ -242,7 +260,15 @@ class TestCampaignStatisticsService:
             "lt_1h": 1,
             "1h_to_6h": 1,
         }
-        assert response["qualifying_plays"] is None
+        # No plays are persisted in this fixture, so the activity volume is
+        # genuinely zero and the per-engagement rates are None (unavailable).
+        assert response["conversion_events"] == 2
+        activity = campaign_statistics(stats_fixture["campaign"]["id"])["activity"]
+        assert activity["qualifying_plays"] == 0
+        assert activity["players"] == 0
+        assert activity["total_play_amount"] == 0.0
+        assert activity["avg_plays_per_player"] is None
+        assert activity["avg_play_amount"] is None
 
     def test_detail_economics(self, stats_fixture):
         economics = campaign_statistics(stats_fixture["campaign"]["id"])["economics"]
@@ -415,6 +441,92 @@ class TestResponseTimeCalculations:
         buckets = campaign_statistics(campaign["id"])["response"]["buckets"]
         for bucket in EMPTY_BUCKETS:
             assert buckets[bucket] == 1, bucket
+
+
+class TestActivityAndGamesGroups:
+    """Phase 2: the persisted activity report and its windowing rules.
+
+    The activity group is a projection of the plays table joined onto the
+    campaign's contacted audience. A play qualifies when it is strictly after
+    the customer's first Welcome SMS and at or before the campaign's ended_at
+    (or the report instant while active).
+    """
+
+    def test_activity_from_persisted_plays(self, _init_db):
+        campaign = _start_campaign()
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_intervention(campaign["id"], "u2", "m_2")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+        _seed_delivery("m_2", "u2", "delivered", 0.9)
+        _seed_play("u1", "Aviator", 10, "2026-01-02T09:00:00+00:00")
+        _seed_play("u1", "Mines", 5, "2026-01-02T10:00:00+00:00")
+        _seed_play("u1", "Aviator", 20, "2026-01-02T11:00:00+00:00")
+        _seed_play("u2", "Mines", 7.5, "2026-01-02T09:30:00+00:00")
+
+        report = campaign_statistics(campaign["id"])
+        activity = report["activity"]
+        assert activity["qualifying_plays"] == 4
+        assert activity["players"] == 2
+        assert activity["repeat_players"] == 1
+        assert activity["converted_players"] == 0  # no intervention responded
+        assert activity["total_play_amount"] == pytest.approx(42.5)
+        assert activity["avg_plays_per_player"] == pytest.approx(2.0)
+        assert activity["max_plays_per_player"] == 3
+        assert activity["before_sms"] == 0
+        assert activity["after_window"] == 0
+
+    def test_games_group_ranking_and_limit(self, _init_db):
+        campaign = _start_campaign()
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+        _seed_play("u1", "Aviator", 10, "2026-01-02T09:00:00+00:00")
+        _seed_play("u1", "Aviator", 15, "2026-01-02T10:00:00+00:00")
+        _seed_play("u1", "Mines", 5, "2026-01-02T11:00:00+00:00")
+        _seed_play("u1", "Roulette", 2, "2026-01-02T12:00:00+00:00")
+
+        report = campaign_statistics(campaign["id"], game_limit=2)
+        games = report["games"]
+        assert [g["game_name"] for g in games] == ["Aviator", "Mines"]
+        assert games[0] == {
+            "game_name": "Aviator",
+            "plays": 2,
+            "customers": 1,
+            "amount": pytest.approx(25.0),
+        }
+
+    def test_activity_window_scoped_by_ended_at(self, _init_db):
+        campaign = _start_campaign(closed=True)
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+        _seed_play("u1", "Aviator", 10, "2026-01-03T00:00:00+00:00")  # inside
+        _seed_play("u1", "Mines", 5, "2026-01-06T00:00:00+00:00")    # after end
+
+        report = campaign_statistics(campaign["id"])
+        assert report["activity"]["qualifying_plays"] == 1
+        assert report["activity"]["total_play_amount"] == pytest.approx(10.0)
+        assert report["activity"]["after_window"] == 1
+        assert report["window"]["attribution_end"] == CAMP_END
+
+    def test_activity_excludes_pre_sms_plays(self, _init_db):
+        campaign = _start_campaign()
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+        _seed_play("u1", "Aviator", 90, "2026-01-01T23:00:00+00:00")  # before SMS
+
+        report = campaign_statistics(campaign["id"])
+        assert report["activity"]["qualifying_plays"] == 0
+        assert report["activity"]["total_play_amount"] == 0.0
+        assert report["activity"]["before_sms"] == 1
+
+    def test_repeat_rate_zero_when_no_repeats(self, _init_db):
+        campaign = _start_campaign()
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+        _seed_play("u1", "Aviator", 10, "2026-01-02T09:00:00+00:00")
+
+        activity = campaign_statistics(campaign["id"])["activity"]
+        assert activity["repeat_players"] == 0
+        assert activity["repeat_rate"] == 0.0  # players=1, genuine zero
 
 
 class TestCampaignStates:
