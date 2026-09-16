@@ -138,6 +138,7 @@ def _activity_metrics(
     play_stats: list[dict],
     converted: set[str],
     edges: dict,
+    contacted_customers: int,
 ) -> dict:
     """Play-volume aggregates over per-customer qualifying-play rows.
 
@@ -145,26 +146,50 @@ def _activity_metrics(
     so the arithmetic below is constant-size regardless of play volume.
     Per-customer rates keep the zero-denominator -> None convention; plain
     counts are genuine zeros.
+
+    The converted-customer averages divide the converted customers' own plays
+    and amounts by the count of converted customers ("how frequently did
+    converted customers play?"); the contacted-customer averages divide the
+    campaign's total qualifying activity by every SMS recipient, whether or not
+    they played at all.
     """
     players = len(play_stats)
     qualifying_plays = sum(int(r["play_count"]) for r in play_stats)
     repeat_players = sum(1 for r in play_stats if int(r["play_count"]) >= 2)
-    converted_players = sum(1 for r in play_stats if r["user_id"] in converted)
-    total_amount = round(sum(float(r["amount"]) for r in play_stats), 2)
     max_plays = max((int(r["play_count"]) for r in play_stats), default=0)
+    total_amount = round(sum(float(r["amount"]) for r in play_stats), 2)
+
+    converted_count = len(converted)
+    converted_rows = [r for r in play_stats if r["user_id"] in converted]
+    converted_plays = sum(int(r["play_count"]) for r in converted_rows)
+    converted_amount = round(sum(float(r["amount"]) for r in converted_rows), 2)
+
     return {
         "qualifying_plays": qualifying_plays,
         "players": players,
+        "single_play_players": players - repeat_players,
         "repeat_players": repeat_players,
-        "converted_players": converted_players,
+        "converted_players": converted_count,
         "avg_plays_per_player": (
             round(qualifying_plays / players, 2) if players else None
+        ),
+        "avg_plays_per_converted": (
+            round(converted_plays / converted_count, 2) if converted_count else None
+        ),
+        "avg_plays_per_contacted": (
+            round(qualifying_plays / contacted_customers, 2) if contacted_customers else None
         ),
         "repeat_rate": round(repeat_players / players, 4) if players else None,
         "max_plays_per_player": max_plays,
         "total_play_amount": total_amount,
         "avg_play_amount": (
             round(total_amount / qualifying_plays, 2) if qualifying_plays else None
+        ),
+        "avg_amount_per_converted": (
+            round(converted_amount / converted_count, 2) if converted_count else None
+        ),
+        "avg_amount_per_contacted": (
+            round(total_amount / contacted_customers, 2) if contacted_customers else None
         ),
         "before_sms": int(edges.get("before_sms", 0)),
         "after_window": int(edges.get("after_end", 0)),
@@ -178,16 +203,25 @@ def _attribution_end(campaign: dict) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _activity_group(campaign: dict, game_limit: int = 10) -> dict:
+def _activity_group(campaign: dict, contacted_customers: int, game_limit: int = 10) -> dict:
     """The persistent activity + per-game projection for one campaign."""
     window_end = _attribution_end(campaign)
     play_stats = get_campaign_play_stats(campaign["id"], window_end)
     converted = get_converted_customers(campaign["id"])
     edges = get_campaign_play_edges(campaign["id"], window_end)
-    games = get_campaign_game_stats(campaign["id"], window_end, limit=game_limit)
+    games = [
+        {
+            "game_name": g["game_name"],
+            "plays": g["plays"],
+            "customers": g["customers"],
+            "amount": round(float(g["amount"]), 2),
+            "avg_amount": round(float(g["avg_amount"]), 2),
+        }
+        for g in get_campaign_game_stats(campaign["id"], window_end, limit=game_limit)
+    ]
     return {
         "window_end": window_end,
-        "metrics": _activity_metrics(play_stats, converted, edges),
+        "metrics": _activity_metrics(play_stats, converted, edges, contacted_customers),
         "games": games,
     }
 
@@ -209,10 +243,10 @@ def campaign_statistics(campaign_id: int, game_limit: int = 10) -> dict | None:
     interventions = get_campaign_intervention_counts(campaign_id)
     funnel = get_campaign_sms_funnel(campaign_id)
     response = _response_metrics(get_campaign_response_plays(campaign_id))
-    activity = _activity_group(campaign, game_limit=game_limit)
 
     contacted = interventions["contacted_customers"]
     converted = interventions["converted_customers"]
+    activity = _activity_group(campaign, contacted, game_limit=game_limit)
     rate = round(converted / contacted, 4) if contacted else 0.0
     delivery_rate = round(funnel["delivered"] / funnel["accepted"], 4) if funnel["accepted"] else None
     avg_cost = round(funnel["cost"] / funnel["accepted"], 2) if funnel["accepted"] else None

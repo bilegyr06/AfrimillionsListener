@@ -247,13 +247,18 @@ export function buildStatisticsSnapshot(detail: CampaignStatisticsDetail): strin
   heading(lines, "Player activity");
   lines.push(`  Qualifying plays             ${formatNumber(activity.qualifying_plays)}`);
   lines.push(`  Players                      ${formatNumber(activity.players)}`);
+  lines.push(`  Played once                  ${formatNumber(activity.single_play_players)}`);
   lines.push(`  Repeat players               ${formatNumber(activity.repeat_players)}`);
   lines.push(`  Converted players            ${formatNumber(activity.converted_players)}`);
   lines.push(`  Avg plays per player         ${formatRatio(activity.avg_plays_per_player)}`);
+  lines.push(`  Avg plays per converted      ${formatRatio(activity.avg_plays_per_converted)}`);
+  lines.push(`  Avg plays per contacted      ${formatRatio(activity.avg_plays_per_contacted)}`);
   lines.push(`  Repeat share                 ${formatPercent(activity.repeat_rate)}`);
   lines.push(`  Most plays by one player     ${formatNumber(activity.max_plays_per_player)}`);
   lines.push(`  Total play amount            ${formatMoney(activity.total_play_amount)}`);
   lines.push(`  Average amount per play      ${formatMoney(activity.avg_play_amount)}`);
+  lines.push(`  Avg amount per converted     ${formatMoney(activity.avg_amount_per_converted)}`);
+  lines.push(`  Avg amount per contacted     ${formatMoney(activity.avg_amount_per_contacted)}`);
   lines.push(`  Played before SMS            ${formatNumber(activity.before_sms)}`);
   lines.push(`  Played after window          ${formatNumber(activity.after_window)}`);
   lines.push("");
@@ -264,7 +269,7 @@ export function buildStatisticsSnapshot(detail: CampaignStatisticsDetail): strin
   } else {
     for (const g of games) {
       lines.push(
-        `  ${g.game_name.padEnd(20)} ${formatNumber(g.plays).padStart(6)} plays \u00b7 ${formatNumber(g.customers).padStart(4)} players \u00b7 ${formatMoney(g.amount)}`,
+        `  ${g.game_name.padEnd(20)} ${formatNumber(g.plays).padStart(6)} plays \u00b7 ${formatNumber(g.customers).padStart(4)} players \u00b7 ${formatMoney(g.amount)} \u00b7 avg ${formatMoney(g.avg_amount)}`,
       );
     }
   }

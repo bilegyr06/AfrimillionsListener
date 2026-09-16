@@ -492,6 +492,7 @@ class TestActivityAndGamesGroups:
             "plays": 2,
             "customers": 1,
             "amount": pytest.approx(25.0),
+            "avg_amount": pytest.approx(12.5),
         }
 
     def test_activity_window_scoped_by_ended_at(self, _init_db):
@@ -527,6 +528,71 @@ class TestActivityAndGamesGroups:
         activity = campaign_statistics(campaign["id"])["activity"]
         assert activity["repeat_players"] == 0
         assert activity["repeat_rate"] == 0.0  # players=1, genuine zero
+
+    def test_per_customer_activity_averages(self, _init_db):
+        """Player and amount averages scoped to converted / contacted customers.
+
+        Converted = u1 (responded), contacted = u1/u2/u3 (all SMS recipients).
+        u3 never plays; u2 plays once; u1 plays three times. Per-player and
+        per-customer denominators therefore differ and are all real numbers.
+        """
+        campaign = _start_campaign()
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_intervention(campaign["id"], "u2", "m_2")
+        _seed_intervention(campaign["id"], "u3", "m_3")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+        _seed_delivery("m_2", "u2", "delivered", 0.9)
+        _seed_delivery("m_3", "u3", "delivered", 0.9)
+        _respond(campaign["id"], "m_1", 600)
+
+        _seed_play("u1", "Aviator", 10, "2026-01-02T09:00:00+00:00")
+        _seed_play("u1", "Aviator", 20, "2026-01-02T10:00:00+00:00")
+        _seed_play("u1", "Mines", 30, "2026-01-02T11:00:00+00:00")
+        _seed_play("u2", "Mines", 5, "2026-01-02T09:30:00+00:00")
+
+        report = campaign_statistics(campaign["id"])
+        activity = report["activity"]
+        assert activity["players"] == 2
+        assert activity["single_play_players"] == 1  # u2 played exactly once
+        assert activity["repeat_players"] == 1       # u1 played three times
+        assert activity["converted_players"] == 1
+        assert activity["qualifying_plays"] == 4
+        assert activity["avg_plays_per_player"] == pytest.approx(2.0)
+        assert activity["avg_plays_per_converted"] == pytest.approx(3.0)
+        assert activity["avg_plays_per_contacted"] == pytest.approx(1.33)
+        assert activity["total_play_amount"] == pytest.approx(65.0)
+        assert activity["avg_amount_per_converted"] == pytest.approx(60.0)
+        assert activity["avg_amount_per_contacted"] == pytest.approx(21.67)
+
+    def test_per_customer_averages_none_when_no_base(self, _init_db):
+        campaign = _start_campaign()
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+
+        activity = campaign_statistics(campaign["id"])["activity"]
+        # No plays at all: nothing to divide over converted (0 customers -> None),
+        # while the contacted denominator exists, making those genuine zeros.
+        assert activity["converted_players"] == 0
+        assert activity["avg_plays_per_converted"] is None
+        assert activity["avg_plays_per_contacted"] == 0.0
+        assert activity["avg_amount_per_converted"] is None
+        assert activity["avg_amount_per_contacted"] == 0.0
+        assert activity["single_play_players"] == 0
+
+    def test_game_avg_amount_column(self, _init_db):
+        campaign = _start_campaign()
+        _seed_intervention(campaign["id"], "u1", "m_1")
+        _seed_delivery("m_1", "u1", "delivered", 0.9)
+        _seed_play("u1", "Aviator", 10, "2026-01-02T09:00:00+00:00")
+        _seed_play("u1", "Aviator", 15, "2026-01-02T10:00:00+00:00")
+        _seed_play("u1", "Mines", 5, "2026-01-02T11:00:00+00:00")
+
+        games = campaign_statistics(campaign["id"])["games"]
+        by_name = {g["game_name"]: g for g in games}
+        assert by_name["Aviator"]["amount"] == pytest.approx(25.0)
+        assert by_name["Aviator"]["avg_amount"] == pytest.approx(12.5)
+        assert by_name["Mines"]["amount"] == pytest.approx(5.0)
+        assert by_name["Mines"]["avg_amount"] == pytest.approx(5.0)
 
 
 class TestCampaignStates:

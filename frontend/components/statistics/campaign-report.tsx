@@ -245,11 +245,16 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
         <div className="section-body" style={{ paddingTop: 0 }}>
           <KvRows
             rows={[
+              { label: "Played once", value: formatNumber(activity.single_play_players) },
               { label: "Average plays per player", value: formatRatio(activity.avg_plays_per_player) },
+              { label: "Average plays per converted customer", value: formatRatio(activity.avg_plays_per_converted) },
+              { label: "Average plays per contacted customer", value: formatRatio(activity.avg_plays_per_contacted) },
               { label: "Repeat share", value: formatPercent(activity.repeat_rate) },
               { label: "Most plays by one player", value: formatNumber(activity.max_plays_per_player) },
               { label: "Total play amount", value: formatMoney(activity.total_play_amount) },
               { label: "Average amount per play", value: formatMoney(activity.avg_play_amount) },
+              { label: "Average amount per converted customer", value: formatMoney(activity.avg_amount_per_converted) },
+              { label: "Average amount per contacted customer", value: formatMoney(activity.avg_amount_per_contacted) },
             ]}
           />
           <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
@@ -273,6 +278,7 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
                   <th className="num right">Plays</th>
                   <th className="num right">Players</th>
                   <th className="num right">Amount</th>
+                  <th className="num right">Avg. per play</th>
                 </tr>
               </thead>
               <tbody>
@@ -282,6 +288,7 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
                     <td className="small num right">{formatNumber(game.plays)}</td>
                     <td className="small num right">{formatNumber(game.customers)}</td>
                     <td className="small num right">{formatMoney(game.amount)}</td>
+                    <td className="small num right">{formatMoney(game.avg_amount)}</td>
                   </tr>
                 ))}
               </tbody>

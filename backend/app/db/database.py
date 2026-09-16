@@ -1434,7 +1434,8 @@ def get_campaign_game_stats(campaign_id: int, window_end: str, limit: int = 10) 
         SELECT p.game_name,
                COUNT(*) AS plays,
                COUNT(DISTINCT p.user_id) AS customers,
-               COALESCE(SUM(p.amount), 0) AS amount
+               COALESCE(SUM(p.amount), 0) AS amount,
+               COALESCE(AVG(p.amount), 0) AS avg_amount
         FROM plays p
         JOIN contact c ON c.user_id = p.user_id
         WHERE p.played_at > c.first_sent_at AND p.played_at <= ?

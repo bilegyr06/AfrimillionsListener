@@ -303,13 +303,18 @@ export interface CampaignActivity {
   window_end: string;
   qualifying_plays: number;
   players: number;
+  single_play_players: number;
   repeat_players: number;
   converted_players: number;
   avg_plays_per_player: number | null;
+  avg_plays_per_converted: number | null;
+  avg_plays_per_contacted: number | null;
   repeat_rate: number | null;
   max_plays_per_player: number;
   total_play_amount: number;
   avg_play_amount: number | null;
+  avg_amount_per_converted: number | null;
+  avg_amount_per_contacted: number | null;
   before_sms: number;
   after_window: number;
 }
@@ -319,6 +324,7 @@ export interface GameStats {
   plays: number;
   customers: number;
   amount: number;
+  avg_amount: number;
 }
 
 export interface CampaignWindow {
