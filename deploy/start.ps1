@@ -45,9 +45,20 @@ if (-not $dockerReady) {
 }
 
 Write-Host "Checking ghcr.io login..."
-& $docker login ghcr.io 2>&1 | Out-Host
-if ($LASTEXITCODE -ne 0) {
-    throw "Please run 'docker login ghcr.io -u <github-username>' first and enter a read packages personal access token."
+$dockerConfig = Join-Path $env:USERPROFILE ".docker\config.json"
+$ghcrLoggedIn = $false
+if (Test-Path $dockerConfig) {
+    try {
+        $config = Get-Content $dockerConfig -Raw | ConvertFrom-Json
+        if ($config.auths.PSObject.Properties.Name -contains "ghcr.io") {
+            $ghcrLoggedIn = $true
+        }
+    } catch {
+        $ghcrLoggedIn = $false
+    }
+}
+if (-not $ghcrLoggedIn) {
+    throw "Not logged in to ghcr.io. Run: docker login ghcr.io -u <github-username> first, then re-run this script."
 }
 
 Write-Host "Starting Afrimillions from container images..."
