@@ -38,11 +38,8 @@ from pathlib import Path
 import pandas as pd
 
 from app.core.config import settings
-from app.db.database import (
-    insert_play_records,
-    mark_plays_ingested,
-    sales_file_processed,
-)
+from app.db.files import mark_plays_ingested, sales_file_processed
+from app.db.players import insert_play_records
 
 SALES_COLUMNS = ("userId", "gameName", "amount", "timestamp")
 

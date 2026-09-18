@@ -13,19 +13,18 @@ os.environ.setdefault("TERMII_API_KEY", "test-key")
 os.environ.setdefault("TERMII_BASE_URL", "https://test.api.termii.com/api")
 os.environ.setdefault("TERMII_SENDER_ID", "TestSender")
 
-from app.db.database import (
-    get_connection,
+from app.db.database import get_connection
+from app.db.sms import (
     get_cycle_stats,
-    get_latest_wallet,
     get_sms_logs,
     get_stats_summary,
     get_unsynced_sms,
-    get_wallet_history,
     log_sms,
     log_sms_batch,
-    log_wallet_snapshot,
     update_sms_status,
 )
+from app.db.wallet import get_latest_wallet, get_wallet_history, log_wallet_snapshot
+from app.integrations.in_memory import InMemorySmsGateway
 from app.services.sms import sync_delivery_statuses
 
 
@@ -259,24 +258,25 @@ class TestWalletLog:
 # ---------------------------------------------------------------------------
 
 class TestStatsUpdater:
+    class _FailingHistoryGateway(InMemorySmsGateway):
+        """Gateway whose history() raises like an unreachable provider."""
+
+        async def history(self, message_id=None):
+            self.calls["history"] += 1
+            raise Exception("Termii API unreachable")
+
     @pytest.mark.asyncio
     async def test_sync_updates_delivered(self, _init_db):
         log_sms({
             "message_id": "msg_sync_1", "user_id": "u1", "kind": "welcome",
             "phone": "2341", "status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(),
         })
-        mock_history = [{"status": "Delivered", "amount": 2.5}]
+        gateway = InMemorySmsGateway(history=[{"status": "Delivered", "amount": 2.5}])
 
-        async def _mock_get_history(mid):
-            return mock_history
+        result = await sync_delivery_statuses(gateway=gateway)
 
-        with patch(
-            "app.integrations.termii.get_message_history",
-            side_effect=_mock_get_history,
-        ) as mock_fn:
-            result = await sync_delivery_statuses()
-
-        mock_fn.assert_called_once_with("msg_sync_1")
+        assert gateway.calls["history"] == 1
+        assert gateway.history_requests == ["msg_sync_1"]
         assert result["checked"] == 1
         assert result["updated"] == 1
         logs = get_sms_logs()
@@ -289,14 +289,11 @@ class TestStatsUpdater:
             "message_id": "msg_sync_2", "user_id": "u1", "kind": "welcome",
             "phone": "2341", "status": "delivered", "sent_at": datetime.now(timezone.utc).isoformat(),
         })
+        gateway = InMemorySmsGateway()
 
-        with patch(
-            "app.integrations.termii.get_message_history",
-            new_callable=AsyncMock,
-        ) as mock_fn:
-            result = await sync_delivery_statuses()
-            mock_fn.assert_not_called()
+        result = await sync_delivery_statuses(gateway=gateway)
 
+        assert gateway.calls["history"] == 0
         assert result["checked"] == 0
 
     @pytest.mark.asyncio
@@ -305,13 +302,9 @@ class TestStatsUpdater:
             "message_id": "msg_sync_3", "user_id": "u1", "kind": "welcome",
             "phone": "2341", "status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(),
         })
+        gateway = self._FailingHistoryGateway()
 
-        with patch(
-            "app.integrations.termii.get_message_history",
-            new_callable=AsyncMock,
-            side_effect=Exception("Termii API unreachable"),
-        ):
-            result = await sync_delivery_statuses()
+        result = await sync_delivery_statuses(gateway=gateway)
 
         assert result["checked"] == 1
         assert result["errors"] == 1
@@ -322,13 +315,9 @@ class TestStatsUpdater:
             "message_id": "msg_sync_5", "user_id": "u1", "kind": "welcome",
             "phone": "2341", "status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(),
         })
+        gateway = InMemorySmsGateway(history=None)
 
-        with patch(
-            "app.integrations.termii.get_message_history",
-            new_callable=AsyncMock,
-            return_value=None,
-        ):
-            result = await sync_delivery_statuses()
+        result = await sync_delivery_statuses(gateway=gateway)
 
         assert result["checked"] == 1
         assert result["updated"] == 0
@@ -340,14 +329,9 @@ class TestStatsUpdater:
             "message_id": "msg_sync_4", "user_id": "u1", "kind": "inactive",
             "phone": "2341", "status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(),
         })
-        mock_history = [{"status": "DND Active on Phone Number", "amount": 1.0}]
+        gateway = InMemorySmsGateway(history=[{"status": "DND Active on Phone Number", "amount": 1.0}])
 
-        with patch(
-            "app.integrations.termii.get_message_history",
-            new_callable=AsyncMock,
-            return_value=mock_history,
-        ):
-            result = await sync_delivery_statuses()
+        result = await sync_delivery_statuses(gateway=gateway)
 
         assert result["updated"] == 1
         logs = get_sms_logs()
@@ -413,28 +397,22 @@ class TestStatsAPI:
         assert data[0]["balance"] == 500.0
 
     def test_stats_balance_mocked(self, client):
-        with patch(
-            "app.main.get_balance",
-            new_callable=AsyncMock,
-            return_value={"balance": 250.0, "currency": "NGN"},
-        ):
+        gateway = InMemorySmsGateway(balance={"balance": 250.0, "currency": "NGN"})
+        with patch("app.routers.stats.get_default_gateway", return_value=gateway):
             r = client.get("/stats/balance")
         assert r.status_code == 200
         assert r.json()["balance"] == 250.0
 
     def test_stats_balance_failure(self, client):
-        with patch(
-            "app.main.get_balance",
-            new_callable=AsyncMock,
-            return_value=None,
-        ):
+        gateway = InMemorySmsGateway(balance=None)
+        with patch("app.routers.stats.get_default_gateway", return_value=gateway):
             r = client.get("/stats/balance")
         assert r.status_code == 200
         assert "Failed" in r.json()["message"]
 
     def test_stats_sync_mocked(self, client):
         with patch(
-            "app.main.sync_delivery_statuses",
+            "app.routers.stats.sync_delivery_statuses",
             new_callable=AsyncMock,
             return_value={"checked": 3, "updated": 2, "errors": 0},
         ):

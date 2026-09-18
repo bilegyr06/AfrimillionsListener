@@ -21,7 +21,7 @@ os.environ.setdefault("TERMII_API_KEY", "test-key")
 os.environ.setdefault("TERMII_BASE_URL", "https://test.api.termii.com/api")
 os.environ.setdefault("TERMII_SENDER_ID", "TestSender")
 
-from app.db.database import (
+from app.db.campaigns import (
     create_campaign,
     create_intervention,
     get_campaign_game_stats,
@@ -29,13 +29,13 @@ from app.db.database import (
     get_campaign_play_stats,
     get_campaigns_play_summary,
     get_converted_customers,
-    get_connection,
     get_open_opportunities,
-    insert_play_records,
-    sales_file_processed,
     update_opportunity_status,
     upsert_opportunities,
 )
+from app.db.database import get_connection
+from app.db.files import sales_file_processed
+from app.db.players import insert_play_records
 from app.services.campaigns import _attribute_interventions
 from app.services.plays import ingest_new_sales_files, ingest_sales_file, play_source_key
 from app.services.statistics import campaign_statistics, campaign_summaries

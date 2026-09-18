@@ -9,7 +9,7 @@ os.environ.setdefault("TERMII_API_KEY", "test-key")
 os.environ.setdefault("TERMII_BASE_URL", "https://test.api.termii.com/api")
 os.environ.setdefault("TERMII_SENDER_ID", "TestSender")
 
-from app.db.database import get_file, list_files
+from app.db.files import get_file, list_files
 
 
 def _csv_bytes(text: str) -> bytes:

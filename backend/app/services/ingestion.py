@@ -113,7 +113,7 @@ def persist_upload(filename: str, content: bytes, uploaded_by: str | None = None
     pipeline picks them up (newest-wins for Registrations/Sales, all-scan for
     Login). Returns the registry record.
     """
-    from app.db.database import insert_file
+    from app.db.files import insert_file
 
     safe_name = Path(filename or "upload.csv").name
     uploaded_at = datetime.now(timezone.utc).isoformat()

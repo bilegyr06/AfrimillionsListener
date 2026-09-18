@@ -2,7 +2,7 @@
 
 This module is the single source of truth for the aggregations behind
 GET /stats/campaigns and GET /stats/campaigns/{id}. It always reads already-
-aggregated rows from app.db.database (which in turn only runs GROUP BY /
+aggregated rows from app.db.campaigns (which in turn only runs GROUP BY /
 COUNT(DISTINCT) SQL) - it never pulls per-customer rows into the UI and it
 never rescans downloaded CSVs.
 
@@ -55,7 +55,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.core.models import WELCOME
-from app.db.database import (
+from app.db.campaigns import (
     get_campaign,
     get_campaign_audience,
     get_campaign_game_count,

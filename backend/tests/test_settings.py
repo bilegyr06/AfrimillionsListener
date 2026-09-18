@@ -12,7 +12,7 @@ os.environ.setdefault("TERMII_SENDER_ID", "TestSender")
 
 from app.core.config import settings
 from app.core.settings_spec import SPECS
-from app.db.database import get_campaign
+from app.db.campaigns import get_campaign
 from app.db.settings import (
     get_all_settings,
     seed_settings_from_db,
@@ -120,7 +120,7 @@ class TestCampaignSnapshot:
         assert snapshot["TERMII_SENDER_ID"] == settings.TERMII_SENDER_ID
 
     def test_plain_db_create_leaves_config_none(self, _init_db):
-        from app.db.database import create_campaign
+        from app.db.campaigns import create_campaign
         result = create_campaign(name="plain")
         campaign = get_campaign(result["campaign"]["id"])
         assert campaign["config"] is None

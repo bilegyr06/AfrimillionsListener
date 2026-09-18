@@ -11,7 +11,8 @@ os.environ.setdefault("TERMII_BASE_URL", "https://test.api.termii.com/api")
 os.environ.setdefault("TERMII_SENDER_ID", "TestSender")
 
 from app.core.config import settings
-from app.db.database import get_connection, upsert_opportunities
+from app.db.campaigns import upsert_opportunities
+from app.db.database import get_connection
 
 
 def _now_iso() -> str:
@@ -19,7 +20,7 @@ def _now_iso() -> str:
 
 
 def _log_sms(kind, user_id, status="sent", phone="2348012345678"):
-    from app.db.database import log_sms
+    from app.db.sms import log_sms
     log_sms({
         "message_id": f"m_{user_id}",
         "user_id": user_id,
