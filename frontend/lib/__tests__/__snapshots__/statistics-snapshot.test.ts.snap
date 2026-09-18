@@ -1,0 +1,111 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildStatisticsSnapshot > locks the plain-text campaign statistics report output 1`] = `
+"AFRIMILLIONS LISTENER — CAMPAIGN STATISTICS REPORT
+Generated 5 Jan 2026, 10:30.
+
+Campaign: January welcome week
+Status: Closed
+Period: 5 Jan 2026 → 19 Jan 2026
+Attribution window: SMS sent → first qualifying play within Jan 5 – 19 2026
+
+CAMPAIGN
+––––––––
+  Opportunities (logins)          2,480
+  Unique customers                2,311
+  Accepted (SMS sent)             2,093
+  Delivered                       2,010
+  Converted customers             1,184
+  Conversion rate                 56.6%
+
+Stages move from logins to distinct customers to accepted sends to delivery
+outcomes to conversions; a customer can appear in several stages.
+
+AUDIENCE
+––––––––
+  Opportunities (logins)          2,480
+  Unique customers                2,311
+  Pending evaluation              12
+  Not sent to:
+    Removed — played before send   154
+    Skipped — limit reached         89
+    Skipped — cooldown active       41
+    Skipped — no valid phone        63
+    SMS failed to send              22
+    Expired with campaign           18
+
+CUSTOMER RESPONSE
+–––––––––––––––––
+  Converted customers             1,184
+  Conversion rate                 56.6%
+  Conversion events               1,320
+  Customers not converted         900
+  Still awaiting response         9
+  First qualifying play           5 Jan 2026, 11:12
+  Avg time to first play          24h 0m
+  Median time to first play       14h 30m
+  P25 / P75                       5h 0m / 36h 0m
+
+  Time to first qualifying play:
+    Under 1 hour           320
+    1 – 6 hours            400
+    6 – 12 hours           200
+    12 – 24 hours          150
+    24 hours or more       114
+
+PLAYER ACTIVITY
+–––––––––––––––
+  Qualifying plays                 2,105
+  Players                          1,184
+  Games played                     3
+  Played once                      844
+  Repeat players                   340
+  Converted players                1,184
+  Avg plays per player             1.78
+  Avg plays per converted          1.78
+  Avg plays per contacted          1.01
+  Repeat share                     28.7%
+  Most plays by one player         14
+  Total play amount                12,500.50
+  Average amount per play          5.94
+  Avg amount per converted         10.55
+  Avg amount per contacted         5.97
+  Played before SMS                96
+  Played after window              37
+
+GAME ACTIVITY
+–––––––––––––
+  Lotto                 1,200 plays ·  900 players · 7,000.00 · avg 7.78
+  Bingo                   655 plays ·  320 players · 3,850.50 · avg 6.03
+  Jackpot                 250 plays ·  180 players · 1,650.00 · avg 9.17
+
+SMS PERFORMANCE
+–––––––––––––––
+  Accepted (sent)                 2,093
+  Customers contacted             2,093
+  Delivered                       2,010
+  Failed                          38
+  Rejected                        12
+  Blocked (DND)                   15
+  Expired                         9
+  Deferred (no provider call)     9
+  Awaiting delivery               0
+  Unmatched to delivery log       4
+  Delivery rate                   96%
+  Avg cost per accepted SMS       2.00
+
+CAMPAIGN ECONOMICS
+––––––––––––––––––
+  SMS cost                        4,186.00
+  Cost per contacted customer     2.00
+  Cost per conversion             3.54
+  Attributed play amount          12,500.50
+  Play amount per converted       10.55
+  Play amount per contacted       5.97
+  Activity / cost ratio           2.99
+
+SMS cost covers this campaign's own accepted Welcome SMS. Attributed play amount
+is qualifying plays inside the attribution window — it is not revenue, and the
+activity/cost ratio is a descriptive ratio of available data, not ROI. A — marks a
+metric with no base to divide over, not a zero result."
+`;

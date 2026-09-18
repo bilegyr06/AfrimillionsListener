@@ -14,23 +14,16 @@ import StatSection from "@/components/statistics/section";
 import { Empty, ErrorBlock, Loading } from "@/components/state-ui";
 import { apiGet } from "@/lib/api";
 import {
+  customerOutcomePresentation,
+  deliveryStatusLabel,
   formatDateTime,
   formatDuration,
   formatMoney,
   formatNumber,
+  isCustomerConverted,
 } from "@/lib/format";
 import type { CampaignCustomersResponse } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
-
-const DELIVERY_PRESENTATION: Record<string, string> = {
-  delivered: "Delivered",
-  failed: "Failed",
-  rejected: "Rejected",
-  dnd: "Blocked (DND)",
-  expired: "Expired",
-  deferred: "Deferred",
-  sent: "Sent",
-};
 
 export function CustomerDrilldown({ campaignId }: { campaignId: number }) {
   const [page, setPage] = useState(1);
@@ -96,14 +89,12 @@ export function CustomerDrilldown({ campaignId }: { campaignId: number }) {
                   <td className="small muted">{row.phone_normalized ?? row.phone_raw ?? "\u2014"}</td>
                   <td className="small">{row.opportunity_status}</td>
                   <td className="small">{row.sent_at ? formatDateTime(row.sent_at) : "\u2014"}</td>
-                  <td className="small">
-                    {row.delivery_status ? DELIVERY_PRESENTATION[row.delivery_status] ?? row.delivery_status : "\u2014"}
-                  </td>
+                  <td className="small">{deliveryStatusLabel(row.delivery_status)}</td>
                   <td className="small">
                     {row.intervention_status ? (
                       <>
                         <div>
-                          {row.intervention_status === "responded" ? "Converted" : row.intervention_status}
+                          {isCustomerConverted(row) ? customerOutcomePresentation(row).label : row.intervention_status}
                           {row.response_seconds != null
                             ? ` \u00b7 ${formatDuration(row.response_seconds)}`
                             : ""}
@@ -125,15 +116,7 @@ export function CustomerDrilldown({ campaignId }: { campaignId: number }) {
               ))}
             </tbody>
           </table>
-          {customers.data.pages > 1 ? (
-            <div className="pager">
-              <Pager
-                page={customers.data.page}
-                pages={customers.data.pages}
-                onChange={setPage}
-              />
-            </div>
-          ) : null}
+          <Pager page={customers.data.page} pages={customers.data.pages} onChange={setPage} />
           <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
             Qualifying plays, attributed amount, and games are each customer\u2019s
             activity inside the campaign attribution window; a customer is

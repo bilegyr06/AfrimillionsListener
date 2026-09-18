@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import CampaignPerformance from "@/components/campaign-performance";
 import {
   CloseCampaignDialog,
   StartCampaignDialog,
@@ -19,7 +20,6 @@ import {
   formatDateTime,
   formatMoney,
   formatNumber,
-  formatPercent,
   formatTime,
   smsKindLabel,
   smsStatusPresentation,
@@ -81,21 +81,6 @@ export default function DashboardPage() {
 
   const current = overview.data?.campaign.current ?? null;
   const active = overview.data?.campaign.active ?? false;
-
-  const performance = useMemo(() => {
-    if (!current) return null;
-    const opps = current.opportunities;
-    const ints = current.interventions;
-    return {
-      targeted: opps.total,
-      sent: ints.total,
-      failed: opps.failed_send ?? 0,
-      conversions: ints.responded ?? 0,
-      rate: current.response_rate,
-      avgSeconds: current.avg_response_seconds,
-      pending: opps.created ?? 0,
-    };
-  }, [current]);
 
   async function handleStart(name?: string) {
     try {
@@ -197,33 +182,7 @@ export default function DashboardPage() {
               </button>
             </div>
           </div>
-          <div className="section-body flush" style={{ paddingBottom: 0 }}>
-            {performance && (
-              <div className="stat-strip" style={{ border: "none", borderRadius: 0 }}>
-                <Stat label="Customers targeted" value={formatNumber(performance.targeted)} />
-                <Stat label="SMS sent" value={formatNumber(performance.sent)} />
-                <Stat label="SMS failed" value={formatNumber(performance.failed)} />
-                <Stat label="Conversions" value={formatNumber(performance.conversions)} accent />
-                <Stat
-                  label="Conversion rate"
-                  value={formatPercent(performance.rate)}
-                  accent
-                  sub={
-                    performance.avgSeconds != null
-                      ? `Avg ${performance.avgSeconds.toFixed(0)}s to convert`
-                      : undefined
-                  }
-                />
-              </div>
-            )}
-          </div>
-          <div className="section-body" style={{ paddingTop: 12 }}>
-            <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-              {performance && performance.pending > 0
-                ? `${formatNumber(performance.pending)} targeted customers still pending evaluation.`
-                : "All targeted customers have been evaluated."}
-            </p>
-          </div>
+          <CampaignPerformance stats={current} showPending />
         </section>
       ) : (
         <section className="section">
