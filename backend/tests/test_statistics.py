@@ -21,18 +21,18 @@ os.environ.setdefault("TERMII_SENDER_ID", "TestSender")
 
 from fastapi.testclient import TestClient
 
-from app.db.database import (
+from app.db.campaigns import (
     count_campaign_customers,
     create_campaign,
     create_intervention,
-    get_connection,
-    insert_play_records,
     list_campaign_customers,
-    log_sms,
     record_intervention_response,
     update_opportunity_status,
     upsert_opportunities,
 )
+from app.db.database import get_connection
+from app.db.players import insert_play_records
+from app.db.sms import log_sms
 
 from app.main import app
 from app.services.plays import play_source_key

@@ -9,12 +9,15 @@ from watchdog.events import FileSystemEventHandler
 
 from app.core import state
 from app.core.config import settings
-from app.db.database import has_pending
+from app.db.players import has_pending
+from app.db.wallet import log_wallet_snapshot
+from app.integrations.sms_gateway import get_default_gateway
 from app.services.sms import sync_delivery_statuses
 from app.workers.processor import begin_cycle, enabled_features
 
 AUTO_START_POLL_SECONDS = 60
 STATS_SYNC_POLL_SECONDS = 30 * 60  # 30 minutes
+WALLET_SNAPSHOT_POLL_SECONDS = 30 * 60  # 30 minutes
 
 
 def _within_start_window() -> bool:
@@ -59,6 +62,30 @@ def _schedule_stats_sync():
     asyncio.ensure_future(_do_sync())
 
 
+def _wallet_snapshot_loop():
+    while True:
+        time.sleep(WALLET_SNAPSHOT_POLL_SECONDS)
+        if state.loop is None:
+            continue
+        state.loop.call_soon_threadsafe(_schedule_wallet_snapshot)
+
+
+def _schedule_wallet_snapshot():
+    async def _do_snapshot():
+        try:
+            info = await get_default_gateway().balance()
+            if info:
+                log_wallet_snapshot(
+                    balance=info.get("balance", 0),
+                    currency=info.get("currency", "NGN"),
+                )
+                print(f"Wallet snapshot: {info.get('balance', 0)} {info.get('currency', 'NGN')}")
+        except Exception as e:
+            print(f"Wallet snapshot failed: {e}")
+
+    asyncio.ensure_future(_do_snapshot())
+
+
 class CSVChangeHandler(FileSystemEventHandler):
     def on_created(self, event):
         self._process(event)
@@ -99,6 +126,10 @@ def start_watcher():
     stats_sync = threading.Thread(target=_stats_sync_loop, daemon=True)
     stats_sync.start()
     print(f"Stats delivery-status sync running every {STATS_SYNC_POLL_SECONDS // 60} minute(s).")
+
+    wallet_snapshot = threading.Thread(target=_wallet_snapshot_loop, daemon=True)
+    wallet_snapshot.start()
+    print(f"Wallet balance snapshot running every {WALLET_SNAPSHOT_POLL_SECONDS // 60} minute(s).")
 
     try:
         while True:

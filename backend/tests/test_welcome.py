@@ -20,18 +20,18 @@ os.environ.setdefault("TERMII_SENDER_ID", "TestSender")
 
 from app.core.config import settings
 from app.core.phones import gate_phone, is_valid_nigerian_phone, normalize_phone
-from app.db.database import (
+from app.db.campaigns import (
     close_active_campaign,
     create_campaign,
     create_intervention,
     get_campaign_stats,
     get_cap_usage,
-    get_connection,
     get_open_opportunities,
     get_welcome_sms_state,
     update_opportunity_status,
     upsert_opportunities,
 )
+from app.db.database import get_connection
 from app.services.campaigns import (
     finalize_campaign,
     ingest_opportunities,
@@ -107,9 +107,14 @@ def _run(campaign=None):
 
 
 def _monkeypatch_send(monkeypatch, result: dict | None):
-    async def _fake_send(phone, message):
-        return result
-    monkeypatch.setattr("app.integrations.termii.send_sms", _fake_send)
+    """Point the dispatcher's default gateway at a canned in-memory responder.
+
+    Returns the gateway so tests can assert on recorded send attempts.
+    """
+    from app.integrations.in_memory import InMemorySmsGateway
+    gateway = InMemorySmsGateway(send_result=result)
+    monkeypatch.setattr("app.services.sms.get_default_gateway", lambda: gateway)
+    return gateway
 
 
 def _seed_success(campaign_id: int, user_id: str, login_at: str, sent_at: str,
@@ -402,13 +407,7 @@ class TestEvaluation:
         assert _status_counts(campaign["id"]).get("sent", 0) == 2
 
     def test_invalid_phone_never_calls_gateway(self, welcome_settings, monkeypatch):
-        calls = []
-
-        async def _fake_send(phone, message):
-            calls.append(phone)
-            return {"message_id": "mid"}
-
-        monkeypatch.setattr("app.integrations.termii.send_sms", _fake_send)
+        gateway = _monkeypatch_send(monkeypatch, {"message_id": "mid"})
         campaign = _start_campaign(hours_ago=6)
         # Registrations carries a Ghanaian-style number that fails the gate.
         pd.DataFrame(
@@ -420,7 +419,7 @@ class TestEvaluation:
 
         assert result["decisions"]["skipped_invalid_phone"] == 1
         assert _status_counts(campaign["id"]).get("skipped_invalid_phone", 0) == 1
-        assert calls == []
+        assert gateway.attempts == []
 
     def test_failed_send_no_intervention(self, welcome_settings, monkeypatch):
         _monkeypatch_send(monkeypatch, None)  # gateway rejects

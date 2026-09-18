@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -28,7 +28,7 @@ def _now_iso() -> str:
 
 
 def _log_sms(kind, user_id, status="sent", cost=1.0):
-    from app.db.database import log_sms
+    from app.db.sms import log_sms
     log_sms({
         "message_id": f"m_{user_id}",
         "user_id": user_id,
@@ -277,11 +277,9 @@ class TestHistoricalPreservation:
 class TestAccountDataUnaffected:
     def test_balance_not_feature_filtered(self, client, features):
         features()
-        with patch(
-            "app.main.get_balance",
-            new_callable=AsyncMock,
-            return_value={"balance": 162968.58, "currency": "NGN"},
-        ):
+        from app.integrations.in_memory import InMemorySmsGateway
+        gateway = InMemorySmsGateway(balance={"balance": 162968.58, "currency": "NGN"})
+        with patch("app.routers.stats.get_default_gateway", return_value=gateway):
             r = client.get("/stats/balance")
         assert r.status_code == 200
         assert r.json()["balance"] == 162968.58

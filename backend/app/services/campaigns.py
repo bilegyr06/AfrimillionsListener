@@ -15,9 +15,10 @@ import pandas as pd
 
 from app.core import state
 from app.core.config import settings
+from app.core.features import Feature, register_feature
 from app.core.models import WELCOME
 from app.core.phones import gate_phone
-from app.db.database import (
+from app.db.campaigns import (
     close_active_campaign,
     close_open_interventions,
     create_campaign,
@@ -26,16 +27,15 @@ from app.db.database import (
     get_campaign,
     get_campaign_stats,
     get_cap_usage,
-    get_earliest_qualifying_play,
     get_last_welcome_sent,
     get_open_interventions,
     get_open_opportunities,
-    get_user_first_play_after,
     mark_opportunities_expired,
     record_intervention_response,
     update_opportunity_status,
     upsert_opportunities,
 )
+from app.db.players import get_earliest_qualifying_play, get_user_first_play_after
 from app.services.ingestion import read_login_events, read_registrations
 from app.services.plays import ingest_new_sales_files
 from app.services.settings import build_campaign_config_snapshot
@@ -390,3 +390,26 @@ async def run_welcome_pipeline(deadline: datetime, cycle_id: str) -> dict:
         "attribution": attribution,
         "count": evaluation["sent"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Feature registry: Feature 1 (welcome) is declared here, where its pipeline
+# lives, so the campaigns service stays the owner of its behavior. The registry
+# contract pipeline is (deadline, cycle_id, logins_df=None); the welcome
+# pipeline reads its own campaign/login/sales state, so an optional shared
+# logins frame is accepted and ignored.
+# ---------------------------------------------------------------------------
+
+async def _run_welcome_pipeline(deadline, cycle_id, logins_df=None) -> dict:
+    """Canonical registry pipeline: one welcome cycle against the active campaign."""
+    return await run_welcome_pipeline(deadline, cycle_id)
+
+
+register_feature(
+    Feature(
+        kind=WELCOME,
+        gate=lambda: WELCOME in settings.ENABLED_FEATURES,
+        template=settings.WELCOME_MESSAGE,
+        pipeline=_run_welcome_pipeline,
+    )
+)

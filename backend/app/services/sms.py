@@ -18,8 +18,8 @@ from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.core.phones import validate_phone
-from app.db.database import get_unsynced_sms, log_sms_batch, update_sms_status
-from app.integrations import termii
+from app.db.sms import get_unsynced_sms, log_sms_batch, update_sms_status
+from app.integrations.sms_gateway import SMSGateway, get_default_gateway
 
 STATUS_SENT = "sent"
 STATUS_FAILED = "failed"
@@ -67,13 +67,19 @@ def _now_iso() -> str:
 
 
 class SmsDispatcher:
-    """Send batch SMS through Termii with bounded concurrency and a deadline.
+    """Send batch SMS through an SMSGateway with bounded concurrency/deadline.
 
     One instance per dispatch run. Compose it around a per-send payload; the
-    caller decides eligibility/cap/cooldown BEFORE dispatching.
+    caller decides eligibility/cap/cooldown BEFORE dispatching. The gateway is
+    injected; when omitted the application default (Termii) is used.
     """
 
-    def __init__(self, max_concurrency: int | None = None):
+    def __init__(
+        self,
+        gateway: SMSGateway | None = None,
+        max_concurrency: int | None = None,
+    ):
+        self._gateway = gateway or get_default_gateway()
         self._sem = asyncio.Semaphore(max_concurrency or settings.MAX_CONCURRENCY)
         self._ledger: list[dict] = []
 
@@ -135,7 +141,7 @@ class SmsDispatcher:
                     phone=check.canonical, message=message, kind=kind, user_id=user_id,
                     cycle_id=cycle_id, status=STATUS_DEFERRED,
                 )
-            result = await termii.send_sms(check.canonical, message)
+            result = await self._gateway.send(check.canonical, message)
 
         sent_at = _now_iso()
         if result:
@@ -191,23 +197,27 @@ def _normalize_termii_status(raw: str) -> str:
     return _TERMII_STATUS_MAP.get(raw.lower().strip(), "sent")
 
 
-async def sync_delivery_statuses(batch_size: int = 100) -> dict:
-    """Synchronize sms_log delivery statuses with Termii's reports.
+async def sync_delivery_statuses(
+    batch_size: int = 100,
+    gateway: SMSGateway | None = None,
+) -> dict:
+    """Synchronize sms_log delivery statuses with the provider's reports.
 
     Finds records that have a message_id but haven't reached a terminal
-    delivery state, queries Termii, and updates the local database.
+    delivery state, queries the gateway, and updates the local database.
     """
     unsynced = get_unsynced_sms(limit=batch_size)
     if not unsynced:
         return {"checked": 0, "updated": 0, "errors": 0}
 
+    gateway = gateway or get_default_gateway()
     updated = 0
     errors = 0
 
     for record in unsynced:
         message_id = record["message_id"]
         try:
-            history = await termii.get_message_history(message_id)
+            history = await gateway.history(message_id)
             if not history or len(history) == 0:
                 continue
 
