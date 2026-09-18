@@ -1,16 +1,22 @@
 // Formatting and label helpers. Business terminology lives here so pages stay
 // declarative and the backend's raw values never leak into the UI.
 
-const dateFmt = new Intl.DateTimeFormat(undefined, {
+// Locale used by every number/date formatter. Pinned explicitly rather than
+// left to the host default so server renders, exports, tests, and CI are
+// byte-identical no matter where the app runs. The intended business format is
+// British-day style: day before month and a 24-hour clock ("5 Jan 2026, 13:05").
+const DEFAULT_LOCALE = "en-GB";
+
+const dateFmt = new Intl.DateTimeFormat(DEFAULT_LOCALE, {
   day: "numeric",
   month: "short",
   year: "numeric",
 });
-const timeFmt = new Intl.DateTimeFormat(undefined, {
+const timeFmt = new Intl.DateTimeFormat(DEFAULT_LOCALE, {
   hour: "2-digit",
   minute: "2-digit",
 });
-const dateTimeFmt = new Intl.DateTimeFormat(undefined, {
+const dateTimeFmt = new Intl.DateTimeFormat(DEFAULT_LOCALE, {
   day: "numeric",
   month: "short",
   year: "numeric",
@@ -41,25 +47,25 @@ export function formatTime(iso: string | null | undefined): string {
 
 export function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
-  return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  return value.toLocaleString(DEFAULT_LOCALE, { maximumFractionDigits: 0 });
 }
 
 export function formatMoney(amount: number | null | undefined, currency?: string | null): string {
   if (amount === null || amount === undefined) return "—";
-  const formatted = amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const formatted = amount.toLocaleString(DEFAULT_LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return currency ? `${currency} ${formatted}` : formatted;
 }
 
 export function formatPercent(rate: number | null | undefined): string {
   if (rate === null || rate === undefined) return "—";
-  return `${(rate * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+  return `${(rate * 100).toLocaleString(DEFAULT_LOCALE, { maximumFractionDigits: 1 })}%`;
 }
 
 // For unit-cost-style ratios with at most two decimals (e.g. avg plays per
 // player) where whole-number rounding would hide the ratio.
 export function formatRatio(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
-  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return value.toLocaleString(DEFAULT_LOCALE, { maximumFractionDigits: 2 });
 }
 
 export function formatDuration(seconds: number | null | undefined): string {
@@ -108,6 +114,24 @@ export function smsStatusPresentation(status: string): StatusPresentation {
   return SMS_STATUS_LABELS[status] ?? { label: status, tone: "neutral" };
 }
 
+// The delivery-vocabulary label for a customer row's accepted-SMS outcome. This
+// is the same table the SMS surfaces use, so the drill-down and SMS views share
+// one delivery vocabulary: `sent` is canonically "Sent (awaiting delivery)"
+// everywhere, and unknown statuses fall back to the raw value.
+export function deliveryStatusLabel(status: string | null | undefined): string {
+  if (!status) return "—";
+  return smsStatusPresentation(status).label;
+}
+
+// Whether an accepted SMS produced a qualifying response. Single source for the
+// "responded ⇒ Converted" rule shared by the outcome decision table and the
+// audit table's response cell.
+export function isCustomerConverted(row: {
+  intervention_status: string | null;
+}): boolean {
+  return row.intervention_status === "responded";
+}
+
 // A customer's outcome is derived from the campaign row: the opportunity tells
 // us whether a send was attempted/dropped, the intervention tells us whether a
 // sent SMS converted.
@@ -118,7 +142,7 @@ export function customerOutcomePresentation(row: {
   const opp = row.opportunity_status;
   const int = row.intervention_status;
 
-  if (int === "responded") return { label: "Converted", tone: "ok" };
+  if (isCustomerConverted(row)) return { label: "Converted", tone: "ok" };
   if (int === "no_response") return { label: "Sent, no conversion", tone: "neutral" };
   if (int === "open" || opp === "sent") return { label: "Sent — awaiting response", tone: "accent" };
   if (opp === "failed_send") return { label: "SMS failed", tone: "bad" };

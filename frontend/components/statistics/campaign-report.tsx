@@ -30,36 +30,16 @@ import {
   formatRatio,
 } from "@/lib/format";
 import { buildStatisticsSnapshot, snapshotFilename } from "@/lib/snapshot";
+import {
+  buildCampaignReport,
+  NOT_SENT_ROWS,
+  RESPONSE_BUCKET_ROWS,
+} from "@/lib/campaign-report";
 import type { CampaignStatisticsDetail } from "@/lib/types";
-
-// Order of the distribution rows mirrors the backend's fixed bucket contract.
-const BUCKET_ROWS: Array<[string, string]> = [
-  ["lt_1h", "Under 1 hour"],
-  ["1h_to_6h", "1 \u2013 6 hours"],
-  ["6h_to_12h", "6 \u2013 12 hours"],
-  ["12h_to_24h", "12 \u2013 24 hours"],
-  ["ge_24h", "24 hours or more"],
-];
-
-const NOT_SENT_ROWS: Array<[string, string]> = [
-  ["disqualified_played", "Removed \u2014 played before send"],
-  ["skipped_cap", "Skipped \u2014 limit reached"],
-  ["skipped_cooldown", "Skipped \u2014 cooldown active"],
-  ["skipped_invalid_phone", "Skipped \u2014 no valid phone"],
-  ["failed_send", "SMS failed to send"],
-  ["expired", "Expired with campaign"],
-];
 
 export default function CampaignReport({ detail }: { detail: CampaignStatisticsDetail }) {
   const [snapshotOpen, setSnapshotOpen] = useState(false);
-  const { campaign, window, audience, funnel, sms, response, activity, games, economics } =
-    detail;
-  const timing = response.time_to_first_play;
-  const attributionNote =
-    campaign.status === "active"
-      ? "SMS sent \u2192 now (rolling while active)"
-      : `SMS sent \u2192 ${formatDateTime(window.attribution_end)}`;
-  const notSentTotal = Object.values(audience.not_sent_to).reduce((sum, n) => sum + n, 0);
+  const r = buildCampaignReport(detail);
 
   const snapshot = useMemo(() => buildStatisticsSnapshot(detail), [detail]);
 
@@ -80,40 +60,40 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
             rows={[
               {
                 label: "Period",
-                value: `${formatDateTime(campaign.started_at)}\u2009\u2192\u2009${campaign.ended_at ? formatDateTime(campaign.ended_at) : "present"}`,
+                value: `${formatDateTime(r.campaign.started_at)}\u2009\u2192\u2009${r.campaign.ended_at ? formatDateTime(r.campaign.ended_at) : "present"}`,
               },
-              { label: "Status", value: campaign.status },
-              { label: "Attribution", value: attributionNote },
+              { label: "Status", value: r.campaign.status },
+              { label: "Attribution", value: r.attributionNote },
               {
                 label: "Attribution end",
-                value: window.attribution_end ? formatDateTime(window.attribution_end) : "Now (rolling while active)",
+                value: r.window.attribution_end ? formatDateTime(r.window.attribution_end) : "Now (rolling while active)",
               },
             ]}
           />
         </div>
         <div className="section-body flush">
           <MetricStrip>
-            <Metric label="Opportunities" value={formatNumber(funnel.opportunities)} />
-            <Metric label="Unique customers" value={formatNumber(funnel.unique_customers)} />
-            <Metric label="Accepted (sent)" value={formatNumber(funnel.accepted)} />
+            <Metric label="Opportunities" value={formatNumber(r.funnel.opportunities)} />
+            <Metric label="Unique customers" value={formatNumber(r.funnel.unique_customers)} />
+            <Metric label="Accepted (sent)" value={formatNumber(r.funnel.accepted)} />
           </MetricStrip>
           <MetricTier>
-            <Metric label="Delivered" value={formatNumber(funnel.delivered)} accent />
-            <Metric label="Converted customers" value={formatNumber(funnel.converted_customers)} accent />
-            <Metric label="Conversion rate" value={formatPercent(response.conversion_rate)} />
+            <Metric label="Delivered" value={formatNumber(r.funnel.delivered)} accent />
+            <Metric label="Converted customers" value={formatNumber(r.funnel.converted_customers)} accent />
+            <Metric label="Conversion rate" value={formatPercent(r.response.conversion_rate)} />
           </MetricTier>
         </div>
         <div className="section-body flush" style={{ paddingTop: 0 }}>
           <MetricStrip>
-            <Metric label="Pending evaluation" value={formatNumber(audience.pending_evaluation)} />
-            <Metric label="Not sent to" value={formatNumber(notSentTotal)} />
+            <Metric label="Pending evaluation" value={formatNumber(r.audience.pending_evaluation)} />
+            <Metric label="Not sent to" value={formatNumber(r.notSentTotal)} />
           </MetricStrip>
         </div>
         <div className="section-body" style={{ paddingTop: 0 }}>
           <KvRows
             rows={NOT_SENT_ROWS.map(([key, label]) => ({
               label,
-              value: formatNumber(audience.not_sent_to[key as keyof typeof audience.not_sent_to]),
+              value: formatNumber(r.audience.not_sent_to[key]),
             }))}
           />
           <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
@@ -128,14 +108,14 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
       <StatSection title="Customer response" aside={<span className="muted small">Within the attribution window</span>}>
         <div className="section-body flush">
           <MetricStrip>
-            <Metric label="Customers contacted" value={formatNumber(response.contacted_customers)} />
-            <Metric label="Converted customers" value={formatNumber(response.converted_customers)} accent />
-            <Metric label="Conversion rate" value={formatPercent(response.conversion_rate)} accent />
+            <Metric label="Customers contacted" value={formatNumber(r.response.contacted_customers)} />
+            <Metric label="Converted customers" value={formatNumber(r.response.converted_customers)} accent />
+            <Metric label="Conversion rate" value={formatPercent(r.response.conversion_rate)} accent />
           </MetricStrip>
           <MetricTier>
-            <Metric label="Conversion events" value={formatNumber(response.conversion_events)} />
-            <Metric label="Not converted" value={formatNumber(response.not_converted_customers)} />
-            <Metric label="Still awaiting response" value={formatNumber(response.pending_outcome)} />
+            <Metric label="Conversion events" value={formatNumber(r.response.conversion_events)} />
+            <Metric label="Not converted" value={formatNumber(r.response.not_converted_customers)} />
+            <Metric label="Still awaiting response" value={formatNumber(r.response.pending_outcome)} />
           </MetricTier>
         </div>
         <div className="section-body" style={{ paddingTop: 0 }}>
@@ -143,12 +123,12 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
             rows={[
               {
                 label: "First qualifying play",
-                value: response.first_qualifying_play_at ? formatDateTime(response.first_qualifying_play_at) : "\u2014",
+                value: r.response.first_qualifying_play_at ? formatDateTime(r.response.first_qualifying_play_at) : "\u2014",
               },
-              { label: "Average time to first play", value: formatDuration(timing.avg) },
-              { label: "Median time to first play", value: formatDuration(timing.median) },
-              { label: "P25 \u2013 P75", value: `${formatDuration(timing.p25)} \u2013 ${formatDuration(timing.p75)}` },
-              { label: "Min \u2013 max", value: `${formatDuration(timing.min)} \u2013 ${formatDuration(timing.max)}` },
+              { label: "Average time to first play", value: formatDuration(r.response.time_to_first_play.avg) },
+              { label: "Median time to first play", value: formatDuration(r.response.time_to_first_play.median) },
+              { label: "P25 \u2013 P75", value: `${formatDuration(r.response.time_to_first_play.p25)} \u2013 ${formatDuration(r.response.time_to_first_play.p75)}` },
+              { label: "Min \u2013 max", value: `${formatDuration(r.response.time_to_first_play.min)} \u2013 ${formatDuration(r.response.time_to_first_play.max)}` },
             ]}
           />
         </div>
@@ -161,10 +141,10 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
               </tr>
             </thead>
             <tbody>
-              {BUCKET_ROWS.map(([key, label]) => (
+              {RESPONSE_BUCKET_ROWS.map(([key, label]) => (
                 <tr key={key}>
                   <td className="small">{label}</td>
-                  <td className="small num right">{formatNumber(response.buckets[key as keyof typeof response.buckets] ?? 0)}</td>
+                  <td className="small num right">{formatNumber(r.response.buckets[key] ?? 0)}</td>
                 </tr>
               ))}
             </tbody>
@@ -175,30 +155,30 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
       <StatSection title="Player activity" aside={<span className="muted small">Qualifying plays by contacted customers</span>}>
         <div className="section-body flush">
           <MetricStrip>
-            <Metric label="Qualifying plays" value={formatNumber(activity.qualifying_plays)} />
-            <Metric label="Players" value={formatNumber(activity.players)} accent />
-            <Metric label="Repeat players" value={formatNumber(activity.repeat_players)} accent />
+            <Metric label="Qualifying plays" value={formatNumber(r.activity.qualifying_plays)} />
+            <Metric label="Players" value={formatNumber(r.activity.players)} accent />
+            <Metric label="Repeat players" value={formatNumber(r.activity.repeat_players)} accent />
           </MetricStrip>
           <MetricTier>
-            <Metric label="Converted players" value={formatNumber(activity.converted_players)} />
-            <Metric label="Played before SMS" value={formatNumber(activity.before_sms)} />
-            <Metric label="Played after window" value={formatNumber(activity.after_window)} />
+            <Metric label="Converted players" value={formatNumber(r.activity.converted_players)} />
+            <Metric label="Played before SMS" value={formatNumber(r.activity.before_sms)} />
+            <Metric label="Played after window" value={formatNumber(r.activity.after_window)} />
           </MetricTier>
         </div>
         <div className="section-body" style={{ paddingTop: 0 }}>
           <KvRows
             rows={[
-              { label: "Games played", value: formatNumber(activity.game_count) },
-              { label: "Played once", value: formatNumber(activity.single_play_players) },
-              { label: "Average plays per player", value: formatRatio(activity.avg_plays_per_player) },
-              { label: "Average plays per converted customer", value: formatRatio(activity.avg_plays_per_converted) },
-              { label: "Average plays per contacted customer", value: formatRatio(activity.avg_plays_per_contacted) },
-              { label: "Repeat share", value: formatPercent(activity.repeat_rate) },
-              { label: "Most plays by one player", value: formatNumber(activity.max_plays_per_player) },
-              { label: "Total play amount", value: formatMoney(activity.total_play_amount) },
-              { label: "Average amount per play", value: formatMoney(activity.avg_play_amount) },
-              { label: "Average amount per converted customer", value: formatMoney(activity.avg_amount_per_converted) },
-              { label: "Average amount per contacted customer", value: formatMoney(activity.avg_amount_per_contacted) },
+              { label: "Games played", value: formatNumber(r.activity.game_count) },
+              { label: "Played once", value: formatNumber(r.activity.single_play_players) },
+              { label: "Average plays per player", value: formatRatio(r.activity.avg_plays_per_player) },
+              { label: "Average plays per converted customer", value: formatRatio(r.activity.avg_plays_per_converted) },
+              { label: "Average plays per contacted customer", value: formatRatio(r.activity.avg_plays_per_contacted) },
+              { label: "Repeat share", value: formatPercent(r.activity.repeat_rate) },
+              { label: "Most plays by one player", value: formatNumber(r.activity.max_plays_per_player) },
+              { label: "Total play amount", value: formatMoney(r.activity.total_play_amount) },
+              { label: "Average amount per play", value: formatMoney(r.activity.avg_play_amount) },
+              { label: "Average amount per converted customer", value: formatMoney(r.activity.avg_amount_per_converted) },
+              { label: "Average amount per contacted customer", value: formatMoney(r.activity.avg_amount_per_contacted) },
             ]}
           />
           <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
@@ -212,7 +192,7 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
 
       <StatSection title="Game activity" aside={<span className="muted small">Qualifying plays by game</span>}>
         <div className="section-body flush">
-          {games.length === 0 ? (
+          {r.games.length === 0 ? (
             <Empty text="No qualifying plays to rank." />
           ) : (
             <table className="table">
@@ -226,7 +206,7 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
                 </tr>
               </thead>
               <tbody>
-                {games.map((game) => (
+                {r.games.map((game) => (
                   <tr key={game.game_name}>
                     <td className="small">{game.game_name}</td>
                     <td className="small num right">{formatNumber(game.plays)}</td>
@@ -250,16 +230,16 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
       <StatSection title="SMS performance" aside={<span className="muted small">Accepted Welcome SMS delivery funnel</span>}>
         <div className="section-body flush">
           <MetricStrip>
-            <Metric label="Accepted (sent)" value={formatNumber(sms.accepted)} />
-            <Metric label="Customers contacted" value={formatNumber(sms.contacted_customers)} />
-            <Metric label="Delivered" value={formatNumber(sms.delivered)} accent />
+            <Metric label="Accepted (sent)" value={formatNumber(r.sms.accepted)} />
+            <Metric label="Customers contacted" value={formatNumber(r.sms.contacted_customers)} />
+            <Metric label="Delivered" value={formatNumber(r.sms.delivered)} accent />
           </MetricStrip>
           <MetricTierSm>
-            <Metric label="Failed" value={formatNumber(sms.failed)} />
-            <Metric label="Rejected" value={formatNumber(sms.rejected)} />
-            <Metric label="Blocked (DND)" value={formatNumber(sms.dnd)} />
-            <Metric label="Deferred" value={formatNumber(sms.deferred)} />
-            <Metric label="Expired" value={formatNumber(sms.expired)} />
+            <Metric label="Failed" value={formatNumber(r.sms.failed)} />
+            <Metric label="Rejected" value={formatNumber(r.sms.rejected)} />
+            <Metric label="Blocked (DND)" value={formatNumber(r.sms.dnd)} />
+            <Metric label="Deferred" value={formatNumber(r.sms.deferred)} />
+            <Metric label="Expired" value={formatNumber(r.sms.expired)} />
           </MetricTierSm>
         </div>
         <div className="section-body" style={{ paddingTop: 0 }}>
@@ -268,17 +248,17 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
               {
                 label: "Delivery rate",
                 value:
-                  sms.delivery_rate == null
+                  r.sms.delivery_rate == null
                     ? "No accepted sends to measure"
-                    : `${formatPercent(sms.delivery_rate)} of accepted sends`,
+                    : `${formatPercent(r.sms.delivery_rate)} of accepted sends`,
               },
               {
                 label: "Awaiting delivery",
-                value: `${formatNumber(sms.sent_awaiting_delivery)}${sms.unmatched > 0 ? ` \u00b7 ${formatNumber(sms.unmatched)} unmatched to delivery log` : ""}`,
+                value: `${formatNumber(r.sms.sent_awaiting_delivery)}${r.sms.unmatched > 0 ? ` \u00b7 ${formatNumber(r.sms.unmatched)} unmatched to delivery log` : ""}`,
               },
               {
                 label: "Avg cost per accepted SMS",
-                value: formatMoney(economics.avg_cost_per_accepted),
+                value: formatMoney(r.economics.avg_cost_per_accepted),
               },
             ]}
           />
@@ -293,13 +273,13 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
         <div className="section-body">
           <KvRows
             rows={[
-              { label: "SMS cost", value: formatMoney(economics.sms_cost) },
-              { label: "Cost per contacted customer", value: formatMoney(economics.cost_per_contacted) },
-              { label: "Cost per conversion", value: formatMoney(economics.cost_per_conversion) },
-              { label: "Attributed play amount", value: formatMoney(economics.total_play_amount) },
-              { label: "Play amount per converted customer", value: formatMoney(economics.play_amount_per_converted) },
-              { label: "Play amount per contacted customer", value: formatMoney(economics.play_amount_per_contacted) },
-              { label: "Activity / cost ratio", value: formatRatio(economics.activity_cost_ratio) },
+              { label: "SMS cost", value: formatMoney(r.economics.sms_cost) },
+              { label: "Cost per contacted customer", value: formatMoney(r.economics.cost_per_contacted) },
+              { label: "Cost per conversion", value: formatMoney(r.economics.cost_per_conversion) },
+              { label: "Attributed play amount", value: formatMoney(r.economics.total_play_amount) },
+              { label: "Play amount per converted customer", value: formatMoney(r.economics.play_amount_per_converted) },
+              { label: "Play amount per contacted customer", value: formatMoney(r.economics.play_amount_per_contacted) },
+              { label: "Activity / cost ratio", value: formatRatio(r.economics.activity_cost_ratio) },
             ]}
           />
           <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
@@ -316,7 +296,7 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
         open={snapshotOpen}
         title="Campaign statistics report"
         text={snapshot}
-        filename={snapshotFilename(`statistics-campaign-${campaign.id}`)}
+        filename={snapshotFilename(`statistics-campaign-${r.campaign.id}`)}
         onClose={() => setSnapshotOpen(false)}
       />
     </>

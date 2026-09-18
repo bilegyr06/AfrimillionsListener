@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
+import CampaignPerformance from "@/components/campaign-performance";
 import { CloseCampaignDialog, useCampaignActions } from "@/components/campaign-actions";
 import SnapshotDialog from "@/components/snapshot-dialog";
 import Notice from "@/components/notice";
@@ -18,7 +19,6 @@ import {
   formatDateTime,
   formatDuration,
   formatNumber,
-  formatPercent,
   formatTime,
 } from "@/lib/format";
 import type {
@@ -161,33 +161,7 @@ export default function CampaignDetailPage() {
         <div className="section-head">
           <h2>Campaign overview</h2>
         </div>
-        <div className="section-body flush" style={{ paddingBottom: 0 }}>
-          <div className="stat-strip" style={{ border: "none", borderRadius: 0 }}>
-            <div className="stat">
-              <div className="label">Customers targeted</div>
-              <div className="value">{formatNumber(stats.opportunities.total)}</div>
-            </div>
-            <div className="stat">
-              <div className="label">SMS sent</div>
-              <div className="value">{formatNumber(stats.interventions.total)}</div>
-            </div>
-            <div className="stat">
-              <div className="label">SMS failed</div>
-              <div className="value">{formatNumber(stats.opportunities.failed_send ?? 0)}</div>
-            </div>
-            <div className="stat">
-              <div className="label">Conversions</div>
-              <div className="value accent">{formatNumber(stats.interventions.responded ?? 0)}</div>
-            </div>
-            <div className="stat">
-              <div className="label">Conversion rate</div>
-              <div className="value accent">{formatPercent(stats.response_rate)}</div>
-              {stats.avg_response_seconds != null && (
-                <div className="sub">Avg {formatDuration(stats.avg_response_seconds)} to convert</div>
-              )}
-            </div>
-          </div>
-        </div>
+        <CampaignPerformance stats={stats} />
         <div className="section-body" style={{ paddingTop: 0 }}>
           <table className="kv">
             <tbody>
@@ -288,7 +262,7 @@ export default function CampaignDetailPage() {
                   {customers.data.items.map((row) => {
                     const outcome = customerOutcomePresentation(row);
                     return (
-                      <tr key={row.user_id + row.login_at}>
+                      <tr key={`${row.user_id}-${row.login_at}`}>
                         <td>
                           <div>{row.first_name || row.user_id}</div>
                           <div className="muted small">{row.user_id}</div>
