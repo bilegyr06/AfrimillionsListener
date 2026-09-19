@@ -12,6 +12,7 @@ from app.integrations.sms_gateway import set_default_gateway
 from app.integrations.termii import TermiiGateway, aclose_client
 from app.routers import campaigns, reporting, sms, stats, system, uploads
 from app.routers import settings as settings_router
+from app.routers import windows as windows_router
 from app.services.settings import apply_persisted_settings
 from app.workers.watcher import start_watcher
 
@@ -58,3 +59,4 @@ app.include_router(stats.router)
 app.include_router(campaigns.router)
 app.include_router(reporting.router)
 app.include_router(settings_router.router)
+app.include_router(windows_router.router)

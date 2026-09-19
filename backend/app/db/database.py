@@ -171,6 +171,109 @@ def init_db():
     _ensure_column(conn, "pending_queue", "last_login_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "welcome_campaigns", "config", "TEXT")
 
+    # ------------------------------------------------------------------ v2.0.0
+    # Campaign Window domain foundation. Version 2 starts from a clean slate:
+    # these tables are NOT populated from legacy v1 welcome campaign history,
+    # and nothing in the v1 pipeline writes to them (the v1 welcome tables are
+    # untouched). Once the v2 SMS execution workflow lands, the v2 tables become
+    # the source of truth for Campaign Windows, Runs, audience/assignment state
+    # and finalized results; the legacy welcome tables remain frozen history.
+    #
+    # All v2 timestamps are stored as UTC-aware ISO strings (Africa/Lagos wall
+    # clock defined boundaries converted to their UTC instant; see
+    # app.core.dates), consistent with plays.played_at / sms_log.sent_at so
+    # lexical SQL comparisons stay valid.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS campaign_windows (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            status TEXT NOT NULL DEFAULT 'active'
+                CHECK (status IN ('active', 'ended', 'finalized')),
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            finalization_deadline TEXT NOT NULL,
+            finalized_at TEXT,
+            ended_at TEXT,
+            business_timezone TEXT NOT NULL DEFAULT 'Africa/Lagos',
+            selected_segments TEXT NOT NULL DEFAULT '[]',
+            assignment_method TEXT NOT NULL DEFAULT 'deterministic'
+                CHECK (assignment_method IN ('deterministic', 'random')),
+            suggested_control_percentage REAL,
+            control_percentage REAL,
+            control_override REAL,
+            eligible_count INTEGER,
+            segment_eligible_counts TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS campaign_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            window_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running'
+                CHECK (status IN ('running', 'completed', 'stopped')),
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            stop_reason TEXT,
+            note TEXT,
+            snapshot_id INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (window_id) REFERENCES campaign_windows (id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS run_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            window_id INTEGER NOT NULL,
+            run_id INTEGER UNIQUE,
+            captured_at TEXT NOT NULL,
+            files TEXT NOT NULL DEFAULT '[]',
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (window_id) REFERENCES campaign_windows (id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS window_audiences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            window_id INTEGER NOT NULL,
+            user_id TEXT NOT NULL,
+            segment_id TEXT NOT NULL,
+            assignment TEXT NOT NULL
+                CHECK (assignment IN ('campaign', 'control')),
+            assignment_method TEXT NOT NULL
+                CHECK (assignment_method IN ('deterministic', 'random')),
+            assignment_config TEXT NOT NULL DEFAULT '{}',
+            entered_at TEXT NOT NULL,
+            eligibility_state TEXT NOT NULL DEFAULT '{}',
+            phone_raw TEXT,
+            phone_normalized TEXT,
+            phone_valid INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE (window_id, user_id),
+            FOREIGN KEY (window_id) REFERENCES campaign_windows (id)
+        )
+        """
+    )
+    for index_ddl in (
+        "CREATE INDEX IF NOT EXISTS idx_windows_status ON campaign_windows (status)",
+        "CREATE INDEX IF NOT EXISTS idx_windows_start ON campaign_windows (start_time)",
+        "CREATE INDEX IF NOT EXISTS idx_runs_window_status ON campaign_runs (window_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_runs_window ON campaign_runs (window_id)",
+        "CREATE INDEX IF NOT EXISTS idx_audience_window ON window_audiences (window_id)",
+        "CREATE INDEX IF NOT EXISTS idx_audience_window_assignment "
+        "ON window_audiences (window_id, assignment)",
+    ):
+        conn.execute(index_ddl)
+
     # Legacy welcome tables are no longer sources of truth; the state now lives
     # in campaigns/opportunities/interventions. Dropping them is the migration.
     conn.execute("DROP TABLE IF EXISTS welcome_sent")
