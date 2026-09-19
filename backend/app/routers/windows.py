@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.db.windows import WindowConfigError, WindowStateError
-from app.services import windows as svc
+from app.services import eligibility, windows as svc
 
 router = APIRouter(tags=["campaign-windows"])
 
@@ -175,6 +175,21 @@ def complete_run(run_id: int):
     try:
         return svc.complete_run(run_id)
     except WindowStateError as exc:
+        raise _http(exc)
+
+
+@router.post("/runs/{run_id}/evaluate")
+def evaluate_run(run_id: int):
+    """Evaluate current-welcome eligibility for a running Run.
+
+    Reads exactly the Run's frozen snapshot, computes the segment membership +
+    eligibility batch (login band, play-after-login, cooldown, phone validity),
+    adds eligible users to the window audience, and refreshes N. Never
+    completes/stops the Run.
+    """
+    try:
+        return eligibility.evaluate_run(run_id)
+    except (WindowConfigError, WindowStateError) as exc:
         raise _http(exc)
 
 
