@@ -434,10 +434,10 @@ class TestAudienceAssignment:
         with pytest.raises(WindowConfigError):
             svc.add_eligible_users(w["id"], [_member("3", segment="Unsegmented")])
 
-    def test_invalid_phone_kept_in_audience_but_not_recipient(self, _init_db):
+    def test_invalid_phone_excluded_from_audience(self, _init_db):
         w = _new_window(start=_dt(2026, 9, 14), control_override=10)
         svc.set_eligible_count(w["id"], 20000)
-        svc.add_eligible_users(
+        result = svc.add_eligible_users(
             w["id"],
             [
                 _member("7", phone="08012345678"),       # campaign + valid
@@ -445,7 +445,11 @@ class TestAudienceAssignment:
                 _member("12", phone="not-a-number"),     # campaign + invalid phone
             ],
         )
-        assert svc.get_audience_member(w["id"], "12")["phone_valid"] == 0
+        assert result["invalid_phone"] == 1
+        # An invalid-phone user is never an audience member: not counted toward
+        # N, never assigned, never an SMS recipient.
+        assert svc.get_audience_member(w["id"], "12") is None
+        assert svc.count_audience(w["id"])["total"] == 2
         recipients = svc.list_campaign_recipients(w["id"])
         assert [r["user_id"] for r in recipients] == ["7"]
 

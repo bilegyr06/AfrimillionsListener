@@ -407,9 +407,10 @@ def add_eligible_users(window_id: int, members: list[dict]) -> dict:
         phone_valid (bool, optional) - explicit phone-validity override.
 
     Only NEW users are assigned (existing members keep their assignment for the
-    whole window). Users with unusable phone numbers remain audience members
-    and receive an assignment (they are not SMS-recipient candidates), but
-    their phone_valid flag is recorded so the SMS layer can exclude them.
+    whole window). Members whose phone is unusable (phone_valid False, whatever
+    the source) are NOT admitted to the audience at all: they never count toward
+    N, never receive an assignment, and can never become SMS recipients. The
+    count of skipped invalid-phone members is reported back as `invalid_phone`.
     """
     window = db.get_window(window_id)
     if window is None:
@@ -428,6 +429,7 @@ def add_eligible_users(window_id: int, members: list[dict]) -> dict:
     method = window["assignment_method"]
     now_iso = dates.to_utc_iso(dates.now_business())
     records = []
+    invalid_phone = 0
     for m in members:
         user_id = str(m["user_id"])
         if not user_id:
@@ -457,7 +459,17 @@ def add_eligible_users(window_id: int, members: list[dict]) -> dict:
 
         phone_raw = str(m["phone"]) if m.get("phone") not in (None, "") else None
         normalized = gate_phone(phone_raw) if phone_raw else None
-        phone_valid = bool(m.get("phone_valid")) if "phone_valid" in m else normalized is not None
+        # An explicit phone_valid bool overrides the canonical gate; None (the
+        # schema default / absence of the key) means "derive from the gate".
+        phone_valid = (
+            bool(m.get("phone_valid"))
+            if m.get("phone_valid") is not None
+            else normalized is not None
+        )
+
+        if not phone_valid:
+            invalid_phone += 1
+            continue
 
         records.append(
             {
@@ -476,7 +488,30 @@ def add_eligible_users(window_id: int, members: list[dict]) -> dict:
 
     result = db.insert_audience_members(window_id, records)
     result["campaign_percentage"] = campaign_pct
+    result["invalid_phone"] = invalid_phone
     return result
+
+
+def refresh_eligible_counts(window_id: int) -> dict | None:
+    """Recompute N from the audience actually held, by segment.
+
+    Used after evaluations so N/control track the admitted audience (e.g. a
+    user is never counted before their phone is validated). Honors an operator
+    control override (the override, when present, is kept as the effective
+    control percentage). When the audience is empty the current N/control is
+    left untouched and None is returned (an empty N cannot be configured).
+    """
+    window = db.get_window(window_id)
+    if window is None:
+        raise WindowStateError(f"Campaign Window #{window_id} not found.")
+    counts = db.count_audience_by_segment(window_id)
+    total = sum(counts.values())
+    if total == 0:
+        return None
+    segment_counts = {
+        s: counts.get(s, 0) for s in window["selected_segments"]
+    }
+    return set_eligible_count(window_id, total, segment_counts)
 
 
 def get_audience(window_id: int) -> list[dict]:
