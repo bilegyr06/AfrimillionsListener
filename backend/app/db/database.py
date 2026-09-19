@@ -171,6 +171,26 @@ def init_db():
     _ensure_column(conn, "pending_queue", "last_login_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "welcome_campaigns", "config", "TEXT")
 
+    # Persistent deposit activity (segment evaluation). Deposit_events exports
+    # userId + timestamp only (there is no deposit amount), so the fact carries
+    # recency/count aggregates only. Like plays, there is no stable deposit id:
+    # the idempotency key is derived deterministically from the source row
+    # (user_id, deposited_at). Deposit timestamps are stored with the same
+    # "+00:00 relabelled wall-clock" convention as plays.played_at so the two
+    # facts compare on one frame.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS deposits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            deposited_at TEXT NOT NULL,
+            source_file TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            source_key TEXT NOT NULL UNIQUE
+        )
+        """
+    )
+
     # ------------------------------------------------------------------ v2.0.0
     # Campaign Window domain foundation. Version 2 starts from a clean slate:
     # these tables are NOT populated from legacy v1 welcome campaign history,
@@ -316,6 +336,13 @@ def init_db():
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_plays_game ON plays (game_name)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_deposits_user_dep "
+        "ON deposits (user_id, deposited_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_deposits_source ON deposits (source_file)"
     )
     conn.commit()
     conn.close()

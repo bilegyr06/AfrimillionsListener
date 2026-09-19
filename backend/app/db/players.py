@@ -181,3 +181,22 @@ def get_earliest_qualifying_play(user_id: str, sent_at: str, window_end: str) ->
     campaign or the current instant while it is active.
     """
     return get_user_first_play_after(user_id, sent_at, window_end)
+
+
+def select_plays(source_files: list[str] | None = None) -> list[dict]:
+    """Play rows, optionally scoped to a set of source Sales files.
+
+    Scoping by source_file is how a Campaign Run sees exactly the plays its
+    snapshot captured: plays ingested from files that landed after the run
+    started carry a source_file outside the snapshot's list and are excluded.
+    """
+    fields = "user_id, played_at, amount, source_file"
+    if source_files:
+        placeholders = ",".join("?" * len(source_files))
+        sql = f"SELECT {fields} FROM plays WHERE source_file IN ({placeholders})"
+    else:
+        sql = f"SELECT {fields} FROM plays"
+    conn = get_connection()
+    rows = conn.execute(sql, list(source_files) if source_files else None).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

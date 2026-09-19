@@ -72,6 +72,7 @@ SPECS: dict[str, SettingSpec] = {
         _spec("END_TIME", "time", "Sending window end", "Latest time a cycle may run (HH:MM).", "time"),
         _spec("ENABLED_FEATURES", "set", "Enabled features", "Comma-separated list: welcome, inactive.", "tags"),
         _spec("WELCOME_EVAL_DELAY_HOURS", "float", "Welcome evaluation delay (hours)", "Wait before a sign-in is eligible for a welcome SMS.", "number"),
+        _spec("WELCOME_LOGIN_AGE_HOURS", "int", "Welcome login age (hours)", "A qualifying login sits inside the one-hour band ending H hours ago (e.g. H=3: logins 3-4h old).", "number"),
         _spec("WELCOME_MAX_MESSAGES", "int", "Welcome cap per user", "Lifetime cap of accepted welcome sends; 0 = unlimited.", "number"),
         _spec("WELCOME_POST_LIMIT_SUPPRESS", "bool", "Suppress after cap", "Stop sending when a user has reached their cap.", "checkbox"),
         _spec("WELCOME_MESSAGE", "str", "Welcome SMS template", "Template with {first_name} placeholder.", "textarea"),

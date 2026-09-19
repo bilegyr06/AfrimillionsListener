@@ -675,6 +675,22 @@ def count_audience(window_id: int) -> dict:
     }
 
 
+def count_audience_by_segment(window_id: int) -> dict[str, int]:
+    """Eligible-audience size per segment (mutually exclusive memberships).
+
+    Because invalid-phone users are never admitted to window_audiences, these
+    counts already exclude them; summing them yields N for the window.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT segment_id, COUNT(*) AS n FROM window_audiences "
+        "WHERE window_id = ? GROUP BY segment_id",
+        (window_id,),
+    ).fetchall()
+    conn.close()
+    return {str(r["segment_id"]): r["n"] for r in rows}
+
+
 def list_campaign_recipients(window_id: int) -> list[dict]:
     """Campaign-assigned, SMS-capable audience members of a window.
 

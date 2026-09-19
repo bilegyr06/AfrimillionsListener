@@ -65,6 +65,20 @@ def from_business_iso(value: str) -> datetime:
     return as_business(dt)
 
 
+def read_source_fact(value: str) -> datetime:
+    """Recover the Africa/Lagos wall-clock instant a source-fact label encodes.
+
+    App-wide fact tables (plays.played_at today; deposits.deposited_at going
+    forward) store source CSV wall-clock times as "+00:00" labels: the digits
+    are the Lagos wall-clock from the CSV relabelled as UTC, not converted.
+    Reading a label back by reinterpreting it as Lagos wall-clock (instead of
+    converting its instant) recovers the original wall clock, so facts stay
+    directly comparable with Lagos-derived boundaries and windows across the
+    whole activity corpus.
+    """
+    return as_business(datetime.fromisoformat(value).replace(tzinfo=None))
+
+
 # ---------------------------------------------------------------------------
 # Default schedule
 # ---------------------------------------------------------------------------

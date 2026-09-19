@@ -86,6 +86,24 @@ def update_sms_status(message_id: str, status: str, cost: float | None = None):
     conn.close()
 
 
+def get_last_accepted_sms(user_id: str) -> str | None:
+    """Most recent accepted/sent SMS for a user, across all kinds.
+
+    Cooldown is global per user and spans Campaign Runs/Windows. Only SMS
+    actually accepted/sent by the provider count (status 'sent' or 'delivered');
+    failed/dnd/rejected/deferred attempts never start a cooldown. Returns the
+    sent_at label of the most recent qualifying send, or None.
+    """
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT MAX(sent_at) AS last_sent FROM sms_log "
+        "WHERE user_id = ? AND status IN ('sent', 'delivered')",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    return str(row["last_sent"]) if row and row["last_sent"] is not None else None
+
+
 def get_unsynced_sms(limit: int = 100) -> list[dict]:
     """Return sent SMS records that have a message_id but haven't reached a
     terminal delivery status yet."""

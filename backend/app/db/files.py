@@ -64,14 +64,20 @@ def sales_file_processed(stored_filename: str) -> bool:
     return row["n"] > 0
 
 
-def mark_plays_ingested(stored_filename: str, report: dict, uploaded_by: str | None = None):
-    """Record that a Sales file was ingested (ledger row upsert).
+def deposit_file_processed(stored_filename: str) -> bool:
+    """Whether a Deposit_events file has already been fully ingested."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM files WHERE dataset = 'Deposit_events' "
+        "AND stored_filename = ? AND status = 'processed'",
+        (stored_filename,),
+    ).fetchone()
+    conn.close()
+    return row["n"] > 0
 
-    The files table doubles as the ingestion ledger: manual uploads already
-    have a row (status 'succeeded' written at accept time), which is promoted
-    to 'processed'; generic/auto files get a new 'processed' row. row_count
-    records inserted plays; parse_error carries the rejection summary.
-    """
+
+def _mark_ingested(dataset: str, stored_filename: str, report: dict, uploaded_by: str | None):
+    """Promote an uploaded/auto file to 'processed' in the files ledger."""
     now = datetime.now(timezone.utc).isoformat()
     summary = (
         f"inserted {report.get('inserted', 0)}; "
@@ -81,8 +87,8 @@ def mark_plays_ingested(stored_filename: str, report: dict, uploaded_by: str | N
     )
     conn = get_connection()
     row = conn.execute(
-        "SELECT id FROM files WHERE dataset = 'Sales' AND stored_filename = ?",
-        (stored_filename,),
+        "SELECT id FROM files WHERE dataset = ? AND stored_filename = ?",
+        (dataset, stored_filename),
     ).fetchone()
     if row:
         conn.execute(
@@ -96,11 +102,12 @@ def mark_plays_ingested(stored_filename: str, report: dict, uploaded_by: str | N
             INSERT INTO files
                 (original_filename, stored_filename, dataset, uploaded_at,
                  uploaded_by, status, row_count, parse_error, processed_at)
-            VALUES (?, ?, 'Sales', ?, ?, 'processed', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, 'processed', ?, ?, ?)
             """,
             (
                 stored_filename,
                 stored_filename,
+                dataset,
                 now,
                 uploaded_by,
                 report.get("inserted", 0),
@@ -110,3 +117,19 @@ def mark_plays_ingested(stored_filename: str, report: dict, uploaded_by: str | N
         )
     conn.commit()
     conn.close()
+
+
+def mark_plays_ingested(stored_filename: str, report: dict, uploaded_by: str | None = None):
+    """Record that a Sales file was ingested (ledger row upsert).
+
+    The files table doubles as the ingestion ledger: manual uploads already
+    have a row (status 'succeeded' written at accept time), which is promoted
+    to 'processed'; generic/auto files get a new 'processed' row. row_count
+    records inserted plays; parse_error carries the rejection summary.
+    """
+    _mark_ingested("Sales", stored_filename, report, uploaded_by)
+
+
+def mark_deposits_ingested(stored_filename: str, report: dict, uploaded_by: str | None = None):
+    """Record that a Deposit_events file was ingested (see mark_plays_ingested)."""
+    _mark_ingested("Deposit_events", stored_filename, report, uploaded_by)
