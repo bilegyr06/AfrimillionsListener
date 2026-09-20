@@ -315,6 +315,7 @@ def evaluate_run(run_id: int, *, now: datetime | None = None) -> dict:
                         "user_id": user_id,
                         "segment_id": segment,
                         "phone": reg.get("phone"),
+                        "run_id": run_id,
                         "eligibility_state": _eligibility_state(
                             login_at, segment, profile, reg, window_id, run_id
                         ),
@@ -409,6 +410,7 @@ def _eligibility_state(
         "segment": segment,
         "login_at": dates.to_utc_iso(login_at),
         "phone": reg.get("phone"),
+        "first_name": reg.get("firstName") or "User",
     }
     if profile is not None:
         state["profile"] = profile.as_dict()

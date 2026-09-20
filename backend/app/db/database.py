@@ -283,6 +283,11 @@ def init_db():
         )
         """
     )
+    # Which Campaign Run admitted each audience member. This column identifies
+    # a Run's FROZEN dispatch target: a user becomes a Run's target when that
+    # Run's evaluation admits them, and no later Run re-admits them (existing
+    # members are never rewritten), so run_id never changes once set.
+    _ensure_column(conn, "window_audiences", "run_id", "INTEGER")
     for index_ddl in (
         "CREATE INDEX IF NOT EXISTS idx_windows_status ON campaign_windows (status)",
         "CREATE INDEX IF NOT EXISTS idx_windows_start ON campaign_windows (start_time)",
@@ -291,6 +296,8 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_audience_window ON window_audiences (window_id)",
         "CREATE INDEX IF NOT EXISTS idx_audience_window_assignment "
         "ON window_audiences (window_id, assignment)",
+        "CREATE INDEX IF NOT EXISTS idx_audience_window_run "
+        "ON window_audiences (window_id, run_id)",
     ):
         conn.execute(index_ddl)
 

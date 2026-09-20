@@ -585,8 +585,8 @@ def insert_audience_members(window_id: int, members: list[dict]) -> dict:
                 INSERT INTO window_audiences (
                     window_id, user_id, segment_id, assignment, assignment_method,
                     assignment_config, entered_at, eligibility_state, phone_raw,
-                    phone_normalized, phone_valid, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    phone_normalized, phone_valid, run_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     window_id,
@@ -600,6 +600,7 @@ def insert_audience_members(window_id: int, members: list[dict]) -> dict:
                     m.get("phone_raw"),
                     m.get("phone_normalized"),
                     1 if m.get("phone_valid") else 0,
+                    m.get("run_id"),
                     _now(),
                 ),
             )
@@ -710,3 +711,34 @@ def list_campaign_recipients(window_id: int) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def get_run_target(window_id: int, run_id: int) -> list[dict]:
+    """A Run's frozen SMS-dispatch target: the members IT admitted.
+
+    A member is part of a Run's target exactly when that Run's evaluation
+    admitted them (run_id on the audience row, set once at admission; later
+    runs never re-admit an existing member, so the target is fixed). Only
+    Campaign-assigned members with a usable phone are dispatchable - Control
+    users receive nothing and invalid phones never reached the audience. The
+    eligibility_state JSON (first name, qualifying login, profile snapshot)
+    is decoded for message building.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT user_id, phone_raw, phone_normalized, eligibility_state
+        FROM window_audiences
+        WHERE window_id = ? AND run_id = ? AND assignment = 'campaign' AND phone_valid = 1
+        ORDER BY entered_at, id
+        """,
+        (window_id, run_id),
+    ).fetchall()
+    conn.close()
+    out = []
+    for row in rows:
+        d = dict(row)
+        if isinstance(d.get("eligibility_state"), str):
+            d["eligibility_state"] = json.loads(d["eligibility_state"])
+        out.append(d)
+    return out

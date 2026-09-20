@@ -404,7 +404,9 @@ def add_eligible_users(window_id: int, members: list[dict]) -> dict:
         segment_id (str) - the selected segment that qualified the user,
         eligibility_state (optional dict) - relevant source/eligibility state,
         phone (str, optional) - raw phone; normalized + validity snapshotted,
-        phone_valid (bool, optional) - explicit phone-validity override.
+        phone_valid (bool, optional) - explicit phone-validity override,
+        run_id (int, optional) - the Campaign Run whose evaluation admitted
+                        this member (that Run's frozen dispatch target).
 
     Only NEW users are assigned (existing members keep their assignment for the
     whole window). Members whose phone is unusable (phone_valid False, whatever
@@ -483,6 +485,7 @@ def add_eligible_users(window_id: int, members: list[dict]) -> dict:
                 "phone_raw": phone_raw,
                 "phone_normalized": normalized if phone_valid else None,
                 "phone_valid": phone_valid,
+                "run_id": m.get("run_id"),
             }
         )
 
