@@ -13,18 +13,32 @@ import Notice from "@/components/notice";
 import StatusPill from "@/components/status-pill";
 import { Empty, ErrorBlock, Loading } from "@/components/state-ui";
 import SnapshotDialog from "@/components/snapshot-dialog";
+import WalletStatus from "@/components/wallet-status";
 import { apiGet } from "@/lib/api";
 import {
+  assignmentMethodLabel,
   campaignDisplayName,
   campaignStatusPresentation,
+  formatDate,
   formatDateTime,
   formatMoney,
   formatNumber,
-  formatTime,
+  formatRelativeTime,
+  reportStatePresentation,
+  segmentLabel,
   smsKindLabel,
   smsStatusPresentation,
+  windowDisplayName,
+  windowStatusPresentation,
 } from "@/lib/format";
-import type { CampaignWithStats, Paged, ReportOverview, SmsLogEntry } from "@/lib/types";
+import type {
+  CampaignWindowRow,
+  CampaignWithStats,
+  Paged,
+  ReportOverview,
+  SegmentsResponse,
+  SmsLogEntry,
+} from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
 import { buildOverviewSnapshot, snapshotFilename } from "@/lib/snapshot";
 
@@ -35,6 +49,138 @@ function Stat({ label, value, accent, sub }: { label: string; value: string; acc
       <div className={`value${accent ? " accent" : ""}`}>{value}</div>
       {sub && <div className="sub">{sub}</div>}
     </div>
+  );
+}
+
+function ActiveWindowSection({
+  windows,
+  catalog,
+  now,
+  reload,
+}: {
+  windows: { data: CampaignWindowRow[] | null; loading: boolean; error: string | null };
+  catalog?: SegmentsResponse["items"];
+  now: Date;
+  reload: () => void;
+}) {
+  const active = (windows.data ?? []).filter((w) => w.status === "active");
+  const header = (
+    <div className="section-head">
+      <h2>Active campaign window</h2>
+      <Link className="btn btn-secondary btn-sm" href="/windows">
+        Windows
+      </Link>
+    </div>
+  );
+
+  if (windows.loading && !windows.data) {
+    return (
+      <section className="section">
+        {header}
+        <div className="section-body">
+          <Loading text="Loading campaign windows\u2026" />
+        </div>
+      </section>
+    );
+  }
+
+  if (windows.error) {
+    return (
+      <section className="section">
+        {header}
+        <div className="section-body">
+          <ErrorBlock message="We couldn't load campaign windows." onRetry={reload} />
+        </div>
+      </section>
+    );
+  }
+
+  if (active.length === 0) {
+    return (
+      <section className="section">
+        {header}
+        <div className="section-body">
+          <span className="muted" style={{ fontSize: 13 }}>
+            No active campaign window right now.
+          </span>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="section">
+      {header}
+      <div className="section-body flush">
+        {active.map((w) => {
+          const status = windowStatusPresentation(w.status);
+          const reportState = reportStatePresentation(w.report_state);
+          const split = w.split.actual;
+          const splitText =
+            split.total_users > 0
+              ? `${formatNumber(split.campaign_users)} / ${formatNumber(split.control_users)}`
+              : "No audience yet";
+          return (
+            <div key={w.id}>
+              <div className="stat-strip" style={{ border: "none", borderRadius: 0 }}>
+                <div className="stat">
+                  <div className="label">Window</div>
+                  <div className="value" style={{ fontSize: 16 }}>
+                    <Link className="table-link" href={`/windows/${w.id}`}>
+                      {windowDisplayName(w.name, w.id)}
+                    </Link>
+                  </div>
+                  <div className="sub" style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                    <StatusPill {...status} />
+                    <StatusPill {...reportState} />
+                  </div>
+                </div>
+                <div className="stat">
+                  <div className="label">Period</div>
+                  <div className="value" style={{ fontSize: 16 }}>
+                    {formatDate(w.start_time)}
+                    {"\u2009\u2192\u2009"}
+                    {formatDate(w.end_time)}
+                  </div>
+                  <div className="sub">Finalization {formatRelativeTime(w.finalization_deadline, now)}</div>
+                </div>
+                <div className="stat">
+                  <div className="label">Segments</div>
+                  <div className="value" style={{ fontSize: 16 }}>
+                    {w.selected_segments.map((id) => segmentLabel(id, catalog)).join(", ")}
+                  </div>
+                  <div className="sub">{`${assignmentMethodLabel(w.assignment_method)} assignment`}</div>
+                </div>
+                <div className="stat">
+                  <div className="label">Eligible (N)</div>
+                  <div className="value" style={{ fontSize: 16 }}>
+                    {formatNumber(w.eligible_count)}
+                  </div>
+                  <div className="sub">
+                    Campaign {formatNumber(split.campaign_users)} \u00b7 Control {formatNumber(split.control_users)}
+                  </div>
+                </div>
+                <div className="stat">
+                  <div className="label">Campaign / Control</div>
+                  <div className="value" style={{ fontSize: 16 }}>
+                    {splitText}
+                  </div>
+                  <div className="sub">
+                    {formatNumber(w.runs_count)} runs
+                    {w.running_runs.length > 0 ? ` \u00b7 ${formatNumber(w.running_runs.length)} running` : ""}
+                  </div>
+                </div>
+              </div>
+              <div className="section-body">
+                <Link className="btn btn-secondary btn-sm" href={`/windows/${w.id}`}>
+                  Open window
+                </Link>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -52,6 +198,8 @@ export default function DashboardPage() {
     [],
   );
   const recent = useQuery<Paged<SmsLogEntry>>(() => apiGet("/sms/logs", { page_size: 8 }), []);
+  const windows = useQuery<CampaignWindowRow[]>(() => apiGet("/windows"), [], 30000);
+  const segments = useQuery<SegmentsResponse>(() => apiGet("/segments"), []);
 
   const [balanceAt, setBalanceAt] = useState<number | null>(null);
   const [nowTs, setNowTs] = useState(() => Date.now());
@@ -197,6 +345,13 @@ export default function DashboardPage() {
         </section>
       )}
 
+      <ActiveWindowSection
+        windows={windows}
+        catalog={segments.data?.items}
+        now={new Date(nowTs)}
+        reload={windows.reload}
+      />
+
       <section className="section">
         <div className="section-head">
           <h2>SMS traffic</h2>
@@ -218,28 +373,13 @@ export default function DashboardPage() {
             <Stat label="Total" value={formatNumber(sms.total)} />
             <Stat label="Total cost" value={formatMoney(sms.total_cost)} />
           </div>
-          {balance.data && (
-            <div className="balance-row">
-              Live balance{" "}
-              <strong>{formatMoney(balance.data.balance, balance.data.currency)}</strong>
-              {balanceAt
-                ? ` · Updated ${Math.max(0, Math.round((nowTs - balanceAt) / 1000))}s ago · as of ${formatTime(
-                    new Date(balanceAt).toISOString(),
-                  )}`
-                : " · checking…"}
-            </div>
-          )}
-          {balance.error && (
-            <p className="balance-error">
-              Live balance unavailable ({balance.error}); showing last known value — retries automatically.
-            </p>
-          )}
-          {data.wallet && (
-            <div className="balance-row">
-              Balance{" "}
-              <strong>{formatMoney(data.wallet.balance, data.wallet.currency)}</strong> · recorded {formatTime(data.wallet.fetched_at)}
-            </div>
-          )}
+          <WalletStatus
+            balance={balance.data}
+            balanceAt={balanceAt}
+            nowTs={nowTs}
+            error={balance.error}
+            historical={data.wallet}
+          />
         </div>
       </section>
 

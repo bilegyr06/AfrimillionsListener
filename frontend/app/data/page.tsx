@@ -5,7 +5,7 @@ import Notice from "@/components/notice";
 import StatusPill from "@/components/status-pill";
 import { Empty, ErrorBlock, Loading } from "@/components/state-ui";
 import { apiGet, apiPostForm } from "@/lib/api";
-import { fileStatusPresentation, formatDateTime, formatNumber } from "@/lib/format";
+import { datasetLabel, fileStatusPresentation, formatDateTime, formatNumber } from "@/lib/format";
 import type { FilesResponse, ReportOverview, SettingsResponse, UploadResponse } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
 
@@ -31,15 +31,10 @@ export default function DataPage() {
       const form = new FormData();
       form.append("file", picked);
       const result = await apiPostForm<UploadResponse>("/files", form);
-      const labels: Record<string, string> = {
-        invitations: "Invitations",
-        sessions: "Sessions",
-        unknown: "Unrecognised (not matching any dataset)",
-      };
       const rows = result.record.row_count;
       setNotice({
         kind: "success",
-        text: `${result.message} Dataset ${labels[result.record.dataset] ?? result.record.dataset}${rows != null ? ` \u00b7 ${formatNumber(rows)} rows` : ""}. It becomes visible to the next cycle.`,
+        text: `${result.message} Dataset ${datasetLabel(result.record.dataset)}${rows != null ? ` \u00b7 ${formatNumber(rows)} rows` : ""}. It becomes available to the next evaluation run.`,
       });
       files.reload();
     } catch (err) {
@@ -120,7 +115,9 @@ export default function DataPage() {
             </button>
           </div>
           <p className="muted" style={{ margin: "10px 0 0", fontSize: 13 }}>
-            CSV must have the same columns as the automated downloads. Parseable files join the matching dataset and go live on the next cycle.
+            CSV must have the same columns as the automated downloads. Parseable files join the matching
+            dataset and are available to the next evaluation run; runs already started stay bound to
+            their own frozen snapshots.
           </p>
         </div>
       </section>
@@ -150,23 +147,20 @@ export default function DataPage() {
                   <th>Dataset</th>
                   <th>Rows</th>
                   <th>Uploaded</th>
+                  <th>Ingested</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {files.data.items.map((f) => {
                   const status = fileStatusPresentation(f.status);
-                  const datasetLabels: Record<string, string> = {
-                    invitations: "Invitations",
-                    sessions: "Sessions",
-                    unknown: "Unrecognised",
-                  };
                   return (
                     <tr key={f.id}>
                       <td className="small">{f.original_filename}</td>
-                      <td className="small">{datasetLabels[f.dataset] ?? f.dataset}</td>
+                      <td className="small">{datasetLabel(f.dataset)}</td>
                       <td className="small num">{formatNumber(f.row_count)}</td>
                       <td className="small">{formatDateTime(f.uploaded_at)}</td>
+                      <td className="small muted">{formatDateTime(f.processed_at)}</td>
                       <td>
                         <StatusPill {...status} />
                         {f.parse_error && <div className="muted small" style={{ marginTop: 2 }}>{f.parse_error}</div>}
