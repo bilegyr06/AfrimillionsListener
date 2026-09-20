@@ -329,3 +329,34 @@ class TestEvaluateRun:
         assert report["candidates"] == 1
         assert report["decisions"]["not_registered"] == 1
         assert report["audience"]["added"] == 0
+
+    def test_wtd_cohort_stays_onboarding_under_unsegmented(self, _init_db, _fixed_bands):
+        # Audit decision lock: the WeekToDate onboarding exclusion is
+        # unconditional. A candidate registered during the current week is
+        # routed to the onboarding pipeline even when the window selects the
+        # 'unsegmented' catch-all, so the Segment_*_3 exclusion semantics
+        # survive the v2 catch-all.
+        data_dir = settings.DATA_FOLDER
+        _write_csv(
+            data_dir,
+            "Login_20260919.csv",
+            ["userId", "timestamp"],
+            [("4", "2026-09-19 15:20:00")],
+        )
+        _write_csv(
+            data_dir,
+            "Registrations_20260910.csv",
+            ["userId", "firstName", "email", "phone", "timestamp"],
+            [("4", "Dan", "d@x.com", "08045678901", "2026-09-15 09:00:00")],
+        )
+        win = _new_window(segments=(eligibility.UNSEGMENTED,))
+        run_id = _start_run(data_dir, win["id"])
+
+        report = eligibility.evaluate_run(run_id, now=NOW)
+
+        assert report["candidates"] == 1
+        assert report["decisions"]["in_onboarding_cohort"] == 1
+        assert report["decisions"]["eligible"] == 0
+        assert report["audience"]["added"] == 0
+        assert report["details"][0]["decision"] == "in_onboarding_cohort"
+        assert _member_ids(win["id"]) == []

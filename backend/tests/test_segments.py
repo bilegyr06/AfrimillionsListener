@@ -90,6 +90,18 @@ class TestReferenceWindows:
     def test_today_start(self):
         assert today_start(dt(2026, 9, 19, 18, 30)) == dt(2026, 9, 19)
 
+    def test_reference_windows_shift_with_reference_instant(self):
+        # Audit check: no SQL literal is baked in. The authoritative SQL
+        # referenced a fixed 2026-09 week, but every window here is computed
+        # from Africa/Lagos reference instants, so a different week
+        # reconstructs its own boundaries.
+        start, end = segment_week_bounds(dt(2026, 8, 22, 18, 30))
+        assert start == dt(2026, 8, 9)      # last Sunday at/before the reference
+        assert end == dt(2026, 8, 16)
+        assert last_sunday(dt(2026, 8, 22)) == dt(2026, 8, 16)
+        assert onboarding_start(dt(2026, 8, 22)) == dt(2026, 8, 17)
+        assert today_start(dt(2026, 8, 22, 18, 30)) == dt(2026, 8, 22)
+
     def test_segment_ids_in_build_order(self):
         assert SEGMENT_IDS == (
             NEW_PLAYED,
@@ -344,3 +356,17 @@ class TestMembership:
         assert evaluate_membership(self.NOW, None, logged_in_last_week=False,
                                    played_last_week=False, played_today=False,
                                    in_onboarding_cohort=False) is None
+
+    def test_membership_holds_for_different_reference_week(self):
+        # Audit check: membership is a pure function of the reference instant,
+        # not of literals from the authoritative SQL (which referenced a
+        # specific 2026-09 week).
+        now = dt(2026, 8, 22, 12)
+        p = profile("9", now, registered_at=now - timedelta(hours=100))
+        assert p.stage == STAGE_NEVER_DEPOSITED
+        assert (
+            evaluate_membership(now, p, logged_in_last_week=False,
+                                played_last_week=False, played_today=False,
+                                in_onboarding_cohort=False)
+            == NEVER_DEPOSITED_UNDER_400_HRS
+        )
