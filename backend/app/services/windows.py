@@ -284,10 +284,24 @@ def end_window(window_id: int) -> dict:
 
 
 def finalize_window(window_id: int) -> dict:
-    """Permanently finalize an ended window (grace period over). Immutable after."""
-    return db.finalize_window_transition(
+    """Permanently finalize an ended window (grace period over). Immutable after.
+
+    Before the terminal transition, the Window report is computed from the
+    persisted facts (ingesting any grace-period uploads first) and frozen into
+    window_reports. Finalization then freezes the window itself; afterward the
+    report is the frozen snapshot and cannot change.
+    """
+    from app.services.window_report import build_report, freeze_report
+
+    report = build_report(window_id, ingest=True)
+    window = db.finalize_window_transition(
         window_id, dates.to_utc_iso(dates.now_business())
     )
+    report["window"].update(
+        {"status": window["status"], "finalized_at": window["finalized_at"]}
+    )
+    freeze_report(window_id, report)
+    return window
 
 
 # ---------------------------------------------------------------------------

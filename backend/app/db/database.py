@@ -191,6 +191,27 @@ def init_db():
         """
     )
 
+    # Persistent login activity (Campaign Window reporting). Login exports are
+    # point-in-time slices of recent sign-ins, and there is no durable login
+    # store today (eligibility re-reads CSV files per snapshot). Window-level
+    # "logged-in" metrics need login history that survives finalization and
+    # does not depend on the current CSV contents, so every Login file is
+    # ingested into this table with the same "+00:00 relabelled wall-clock"
+    # convention as plays/deposits. Like the other fact tables there is no
+    # stable login id, so the idempotency key is (user_id, logged_at).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS logins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            logged_at TEXT NOT NULL,
+            source_file TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            source_key TEXT NOT NULL UNIQUE
+        )
+        """
+    )
+
     # ------------------------------------------------------------------ v2.0.0
     # Campaign Window domain foundation. Version 2 starts from a clean slate:
     # these tables are NOT populated from legacy v1 welcome campaign history,
@@ -288,6 +309,26 @@ def init_db():
     # Run's evaluation admits them, and no later Run re-admits them (existing
     # members are never rewritten), so run_id never changes once set.
     _ensure_column(conn, "window_audiences", "run_id", "INTEGER")
+
+    # Frozen Campaign Window report snapshots (v2.0.0 finalization). A
+    # finalized Window serves the report persisted here; the report is
+    # computed once at finalization from the persisted facts and never
+    # recomputed against later uploads, so a finalized Window's report stays
+    # immutable and reproducible from its persisted state. schema_version lets
+    # a later reporting change invalidate old snapshots explicitly.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS window_reports (
+            window_id INTEGER PRIMARY KEY,
+            report TEXT NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            finalized_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (window_id) REFERENCES campaign_windows (id)
+        )
+        """
+    )
     for index_ddl in (
         "CREATE INDEX IF NOT EXISTS idx_windows_status ON campaign_windows (status)",
         "CREATE INDEX IF NOT EXISTS idx_windows_start ON campaign_windows (start_time)",
@@ -350,6 +391,13 @@ def init_db():
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_deposits_source ON deposits (source_file)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_logins_user_logged "
+        "ON logins (user_id, logged_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_logins_logged_at ON logins (logged_at)"
     )
     conn.commit()
     conn.close()

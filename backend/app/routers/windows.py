@@ -113,6 +113,24 @@ def finalize_window(window_id: int):
         raise _http(exc)
 
 
+@router.get("/windows/{window_id}/report")
+def window_report(window_id: int):
+    """The Campaign Window report.
+
+    Finalized windows serve the frozen snapshot written at finalization;
+    active/ended windows compute a live report (ingesting grace-period uploads
+    first).
+    """
+    from app.services.window_report import get_report
+
+    if svc.get_window(window_id) is None:
+        raise HTTPException(status_code=404, detail=f"Campaign Window #{window_id} not found.")
+    try:
+        return get_report(window_id)
+    except WindowStateError as exc:
+        raise _http(exc)
+
+
 @router.post("/windows/{window_id}/extend-end")
 def extend_end(window_id: int, req: ExtendEndRequest):
     try:

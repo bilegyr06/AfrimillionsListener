@@ -79,6 +79,19 @@ def read_source_fact(value: str) -> datetime:
     return as_business(datetime.fromisoformat(value).replace(tzinfo=None))
 
 
+def to_source_fact(dt: datetime) -> str:
+    """Serialize an instant into the relabelled "+00:00" source-fact label.
+
+    Inverse of read_source_fact: the Africa/Lagos wall-clock digits of `dt` are
+    written with a "+00:00" suffix (the label convention the plays / deposits /
+    logins fact tables store). This is deliberately NOT `dt`'s true UTC instant
+    (Lagos is UTC+1); it is the storage frame facts use, so a range computed
+    with this helper compares lexicographically against stored fact labels for
+    the exact wall-clock period [dt_start, dt_end].
+    """
+    return as_business(dt).replace(tzinfo=timezone.utc).isoformat(timespec="seconds")
+
+
 # ---------------------------------------------------------------------------
 # Default schedule
 # ---------------------------------------------------------------------------
