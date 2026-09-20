@@ -104,6 +104,59 @@ def get_last_accepted_sms(user_id: str) -> str | None:
     return str(row["last_sent"]) if row and row["last_sent"] is not None else None
 
 
+def count_accepted_welcome_sms(user_id: str) -> int:
+    """Accepted Welcome sends for a user, cumulative across runs and legacy.
+
+    Counts sms_log rows of kind 'welcome' with an accepted provider status
+    (sent/delivered). Both the legacy v1 pipeline and the v2 Campaign Run
+    execution record accepted Welcome sends into sms_log with kind 'welcome',
+    so one cap applies across them; failed/dnd/rejected/deferred attempts
+    never count toward the cap.
+    """
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM sms_log "
+        "WHERE user_id = ? AND kind = 'welcome' AND status IN ('sent', 'delivered')",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    return row["n"]
+
+
+def get_last_accepted_welcome_sms(user_id: str) -> str | None:
+    """sent_at of the user's most recent accepted Welcome SMS, or None.
+
+    This is the "most recent relevant accepted intervention" for attribution:
+    the welcome SMS that must precede a qualifying play for that play to count
+    as a conversion (or to decide which Run the play is attributed to).
+    """
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT MAX(sent_at) AS last_sent FROM sms_log "
+        "WHERE user_id = ? AND kind = 'welcome' AND status IN ('sent', 'delivered')",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    return str(row["last_sent"]) if row and row["last_sent"] is not None else None
+
+
+def get_accepted_run_sends(run_id: int) -> set[str]:
+    """user_ids with an accepted SMS for a given Campaign Run.
+
+    Run sends carry cycle_id "run:{run_id}" in sms_log. A user already
+    accepted for a Run is never sent again by that Run, so repeat dispatch
+    calls are idempotent (no automatic retry; only failures remain open).
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT DISTINCT user_id FROM sms_log "
+        "WHERE cycle_id = ? AND status IN ('sent', 'delivered')",
+        (f"run:{run_id}",),
+    ).fetchall()
+    conn.close()
+    return {str(r["user_id"]) for r in rows}
+
+
 def get_unsynced_sms(limit: int = 100) -> list[dict]:
     """Return sent SMS records that have a message_id but haven't reached a
     terminal delivery status yet."""

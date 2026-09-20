@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.db.windows import WindowConfigError, WindowStateError
-from app.services import eligibility, windows as svc
+from app.services import eligibility, execution, windows as svc
 
 router = APIRouter(tags=["campaign-windows"])
 
@@ -189,6 +189,23 @@ def evaluate_run(run_id: int):
     """
     try:
         return eligibility.evaluate_run(run_id)
+    except (WindowConfigError, WindowStateError) as exc:
+        raise _http(exc)
+
+
+@router.post("/runs/{run_id}/dispatch")
+async def dispatch_run(run_id: int):
+    """Send the Welcome SMS to a running Run's frozen target.
+
+    Reads exactly the members THIS Run admitted (window_audiences run_id,
+    Campaign-assigned, phone_valid). Control users and unusable phones never
+    reached the audience. Cooldown and the welcome cap are enforced at
+    dispatch; a user already accepted for this Run (sms_log cycle_id
+    "run:{run_id}") is never re-sent, so repeated calls are idempotent and
+    only failed attempts are retried. Does not complete/stop the Run.
+    """
+    try:
+        return await execution.dispatch_run(run_id)
     except (WindowConfigError, WindowStateError) as exc:
         raise _http(exc)
 
