@@ -1,15 +1,55 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import StatusPill from "@/components/status-pill";
 import { Empty, ErrorBlock, Loading } from "@/components/state-ui";
 import { apiGet } from "@/lib/api";
-import { formatDate, formatNumber, windowDisplayName, windowStatusPresentation } from "@/lib/format";
-import type { CampaignWindowRow } from "@/lib/types";
+import {
+  formatDate,
+  formatNumber,
+  formatPercentage,
+  formatRelativeTime,
+  reportStatePresentation,
+  segmentLabel,
+  windowDisplayName,
+  windowStatusPresentation,
+} from "@/lib/format";
+import type { CampaignWindowRow, SegmentsResponse } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
 
+// A split is always shown as both sides: "Campaign 80% / Control 20%". The
+// percentages come straight from the backend's split summary.
+function SplitCell({ row }: { row: CampaignWindowRow }) {
+  const split = row.split;
+  const actual = split.actual;
+  if (actual.total_users <= 0) {
+    return <span className="muted small">No audience yet</span>;
+  }
+  return (
+    <div className="small">
+      <div>
+        Campaign {formatPercentage(actual.campaign_percentage)}
+        {"\u00b7"} Control {formatPercentage(actual.control_percentage)}
+      </div>
+      <div className="muted">
+        {formatNumber(actual.campaign_users)} / {formatNumber(actual.control_users)}
+      </div>
+    </div>
+  );
+}
+
 export default function WindowsPage() {
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowTs(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, []);
+
   const windows = useQuery<CampaignWindowRow[]>(() => apiGet("/windows"), [], 30000);
+  const segments = useQuery<SegmentsResponse>(() => apiGet("/segments"), []);
+
+  const catalog = segments.data?.items;
 
   return (
     <div className="page">
@@ -19,6 +59,9 @@ export default function WindowsPage() {
           <button className="btn btn-secondary" onClick={windows.reload}>
             Refresh
           </button>
+          <Link className="btn btn-primary" href="/windows/new">
+            New window
+          </Link>
         </div>
       </div>
 
@@ -36,7 +79,7 @@ export default function WindowsPage() {
           </div>
         ) : !windows.data || windows.data.length === 0 ? (
           <div className="section-body">
-            <Empty text="No campaign windows yet." />
+            <Empty text="No campaign windows yet. Start one to configure a window and its runs." />
           </div>
         ) : (
           <table className="table">
@@ -44,15 +87,23 @@ export default function WindowsPage() {
               <tr>
                 <th>Window</th>
                 <th>Status</th>
+                <th>Report</th>
                 <th>Period</th>
-                <th>Finalization deadline</th>
-                <th>Eligible (N)</th>
-                <th>Control %</th>
+                <th>Segments</th>
+                <th>Campaign / Control</th>
+                <th>Runs</th>
+                <th>Finalization</th>
               </tr>
             </thead>
             <tbody>
               {windows.data.map((w) => {
-                const presentation = windowStatusPresentation(w.status);
+                const status = windowStatusPresentation(w.status);
+                const report = reportStatePresentation(w.report_state);
+                const now = new Date(nowTs);
+                const deadlineText =
+                  w.finalized_at
+                    ? "Frozen"
+                    : `${formatRelativeTime(w.finalization_deadline, now)} (${formatDate(w.finalization_deadline)})`;
                 return (
                   <tr key={w.id} className={w.status === "active" ? "row-active" : undefined}>
                     <td className="small">
@@ -61,16 +112,27 @@ export default function WindowsPage() {
                       </Link>
                     </td>
                     <td>
-                      <StatusPill {...presentation} />
+                      <StatusPill {...status} />
+                    </td>
+                    <td>
+                      <StatusPill {...report} />
                     </td>
                     <td className="small muted">
                       {formatDate(w.start_time)}
                       {"\u2009\u2192\u2009"}
                       {formatDate(w.end_time)}
                     </td>
-                    <td className="small muted">{formatDate(w.finalization_deadline)}</td>
-                    <td className="small num">{formatNumber(w.eligible_count)}</td>
-                    <td className="small num">{w.control_percentage ?? "\u2014"}</td>
+                    <td className="small">
+                      {w.selected_segments.map((id) => segmentLabel(id, catalog)).join(", ")}
+                    </td>
+                    <td>
+                      <SplitCell row={w} />
+                    </td>
+                    <td className="small num">
+                      {formatNumber(w.runs_count)}
+                      {w.running_runs.length > 0 ? ` \u00b7 ${w.running_runs.length} running` : ""}
+                    </td>
+                    <td className="small muted">{deadlineText}</td>
                   </tr>
                 );
               })}

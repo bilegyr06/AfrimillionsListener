@@ -488,6 +488,7 @@ h3 { font-size: 15px; font-weight: 600; margin: 0; }
 .field input[type="number"],
 .field input[type="time"],
 .field input[type="date"],
+.field input[type="datetime-local"],
 .field select,
 .field textarea {
   height: 38px;
@@ -705,6 +706,85 @@ h3 { font-size: 15px; font-weight: 600; margin: 0; }
 .upload-area input[type="file"] {
   flex: 1;
   font-size: 14px;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Campaign Window operator forms (v2.0.0 workspace + create flow)             */
+/* -------------------------------------------------------------------------- */
+
+.input {
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface);
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px 20px;
+}
+
+.field-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.field-hint {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.field-static {
+  height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--text-muted);
+  background: var(--surface-2);
+}
+
+.checkbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.checkbox-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  accent-color: var(--accent);
+}
+
+.page-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
 }
 
 /* -------------------------------------------------------------------------- */
