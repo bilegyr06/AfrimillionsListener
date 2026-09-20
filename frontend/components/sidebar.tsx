@@ -9,6 +9,7 @@ import type { HealthResponse } from "@/lib/types";
 const NAV = [
   { href: "/", label: "Dashboard", icon: "dashboard" },
   { href: "/campaigns", label: "Campaigns", icon: "campaigns" },
+  { href: "/windows", label: "Windows", icon: "statistics" },
   { href: "/statistics", label: "Statistics", icon: "statistics" },
   { href: "/sms", label: "SMS Activity", icon: "sms" },
   { href: "/data", label: "Data", icon: "data" },

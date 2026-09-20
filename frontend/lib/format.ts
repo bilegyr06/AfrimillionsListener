@@ -177,3 +177,32 @@ export function campaignStatusPresentation(status: string): StatusPresentation {
 export function campaignDisplayName(name: string | null, id: number): string {
   return name?.trim() ? name : `Campaign #${id}`;
 }
+
+// ---------------------------------------------------------------------------
+// Campaign Window (v2.0.0) labels
+// ---------------------------------------------------------------------------
+
+export const WINDOW_STATUS_LABELS: Record<string, StatusPresentation> = {
+  active: { label: "Active", tone: "ok" },
+  ended: { label: "Ended", tone: "warn" },
+  finalized: { label: "Finalized", tone: "neutral" },
+};
+
+export function windowStatusPresentation(status: string): StatusPresentation {
+  return WINDOW_STATUS_LABELS[status] ?? { label: status, tone: "neutral" };
+}
+
+export function windowDisplayName(name: string | null, id: number): string {
+  return name?.trim() ? name : `Window #${id}`;
+}
+
+// Run statuses shown inside a window report.
+export const RUN_STATUS_LABELS: Record<string, StatusPresentation> = {
+  running: { label: "Running", tone: "ok" },
+  completed: { label: "Completed", tone: "neutral" },
+  stopped: { label: "Stopped", tone: "warn" },
+};
+
+export function runStatusPresentation(status: string): StatusPresentation {
+  return RUN_STATUS_LABELS[status] ?? { label: status, tone: "neutral" };
+}

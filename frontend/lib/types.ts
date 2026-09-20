@@ -413,3 +413,140 @@ export interface CampaignStatisticsSummary {
   };
   economics: CampaignEconomics;
 }
+
+// ---------------------------------------------------------------------------
+// Campaign Windows (v2.0.0 reporting surface)
+// ---------------------------------------------------------------------------
+
+// Views of the v2 Campaign Window API (app.routers.windows). The backend is the
+// single aggregation authority: the UI renders Campaign/Control numbers exactly
+// as the report service produced them and never recomputes anything.
+
+export type WindowStatus = "active" | "ended" | "finalized";
+export type WindowAssignmentMethod = "deterministic" | "random";
+export type RunStatus = "running" | "completed" | "stopped";
+
+export interface CampaignWindowRow {
+  id: number;
+  name: string | null;
+  status: WindowStatus;
+  start_time: string;
+  end_time: string;
+  finalization_deadline: string;
+  finalized_at: string | null;
+  ended_at: string | null;
+  business_timezone: string;
+  control_percentage: number | null;
+  eligible_count: number | null;
+  created_at: string;
+}
+
+export interface CampaignRunSummary {
+  run_id: number;
+  status: RunStatus;
+  note: string | null;
+  targeted_users: number;
+  accepted_interventions: number;
+  failed_sends: number;
+  contacted_users: number;
+  converted_users: number;
+  conversion_events: number;
+  attributed_plays: number;
+  attributed_amount: number;
+  plays_by_target_users: number;
+  amount_by_target_users: number;
+}
+
+export interface WindowGroupMetrics {
+  assignment: "campaign" | "control";
+  total_targeted_audience: number;
+  total_logged_in_users: number;
+  total_played_users: number;
+  total_deposited_users: number;
+  total_sales: number;
+  total_plays: number;
+  login_rate: number | null;
+  play_rate: number | null;
+  deposit_rate: number | null;
+  arpu: number | null;
+  arppu: number | null;
+  plays_per_player: number | null;
+  active_days: number;
+  active_days_per_player: number | null;
+  multi_day_players: number;
+  multi_day_player_rate: number | null;
+  deposit_to_play_rate: number | null;
+  login_to_play_rate: number | null;
+  deposited_no_play_users: number;
+  logged_in_no_play_users: number;
+  single_play_players: number;
+  multiple_play_players: number;
+  converted_users: number | null;
+  contacted_users: number | null;
+  conversion_rate: number | null;
+  avg_plays_per_converted: number | null;
+  avg_plays_per_contacted: number | null;
+  avg_amount_per_converted: number | null;
+  avg_amount_per_contacted: number | null;
+  conversion_not_applicable?: boolean;
+}
+
+export interface WindowGameStats {
+  game_name: string;
+  plays: number;
+  customers: number;
+  amount: number;
+  avg_amount: number | null;
+}
+
+export interface WindowReport {
+  schema_version: number;
+  window: {
+    id: number;
+    name: string | null;
+    status: WindowStatus;
+    start_time: string;
+    end_time: string;
+    finalization_deadline: string;
+    finalized_at: string | null;
+    ended_at: string | null;
+    business_timezone: string;
+    assignment_method: WindowAssignmentMethod;
+    control_percentage: number | null;
+    eligible_count: number | null;
+  };
+  evaluation_period: {
+    start: string;
+    end: string;
+    timezone: string;
+    fact_start: string;
+    fact_end: string;
+    description: string;
+  };
+  audience: {
+    campaignable_total: number;
+    campaign: number;
+    control: number;
+  };
+  groups: {
+    campaign: WindowGroupMetrics;
+    control: WindowGroupMetrics;
+  };
+  games: {
+    campaign: WindowGameStats[];
+    control: WindowGameStats[];
+  };
+  runs: CampaignRunSummary[];
+  attribution: {
+    model: string;
+    accepted_interventions: number;
+    contacted_users_total: number;
+    converted_users_total: number;
+    conversion_events: number;
+    attributed_plays: number;
+    attributed_amount: number;
+    unattributed_plays: number;
+    unattributed_amount: number;
+  };
+  computed_at: string;
+}
