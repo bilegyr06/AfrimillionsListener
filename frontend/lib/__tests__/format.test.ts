@@ -1,15 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
+  assignmentMethodLabel,
   customerOutcomePresentation,
+  datasetLabel,
   deliveryStatusLabel,
   formatDate,
   formatDateTime,
   formatMoney,
   formatNumber,
   formatPercent,
+  formatPercentage,
   formatRatio,
+  formatRelativeTime,
   formatTime,
   isCustomerConverted,
+  reportStatePresentation,
+  segmentLabel,
   smsStatusPresentation,
 } from "@/lib/format";
 
@@ -106,5 +112,49 @@ describe("isCustomerConverted (responded ⇒ Converted rule)", () => {
     expect(
       customerOutcomePresentation({ opportunity_status: "sent", intervention_status: "responded" }).label,
     ).toBe("Converted");
+  });
+});
+
+// The Campaign Window operator surface formats (v2.0.0).
+describe("window / segment / data labels", () => {
+  it("formats percentage points without interpreting them as a rate", () => {
+    expect(formatPercentage(20)).toBe("20%");
+    expect(formatPercentage(31.062)).toBe("31.1%");
+    expect(formatPercentage(null)).toBe("—");
+    expect(formatPercentage(undefined)).toBe("—");
+  });
+
+  it("renders relative time to a deadline with a pinned clock", () => {
+    const now = new Date("2026-09-16T09:00:00.000Z");
+    expect(formatRelativeTime("2026-09-18T09:00:00.000Z", now)).toBe("2d left");
+    expect(formatRelativeTime("2026-09-16T15:00:00.000Z", now)).toBe("6h left");
+    expect(formatRelativeTime("2026-09-16T09:20:00.000Z", now)).toBe("20m left");
+    expect(formatRelativeTime("2026-09-16T08:59:30.000Z", now)).toBe("Due now");
+    expect(formatRelativeTime("2026-09-16T08:59:00.000Z", now)).toBe("Overdue by 1m");
+    expect(formatRelativeTime("2026-09-14T09:00:00.000Z", now)).toBe("2d overdue");
+    expect(formatRelativeTime("2026-09-16T07:00:00.000Z", now)).toBe("Overdue by 2h");
+    expect(formatRelativeTime(null, now)).toBe("—");
+  });
+
+  it("labels assignment methods and report states", () => {
+    expect(assignmentMethodLabel("deterministic")).toBe("Deterministic");
+    expect(assignmentMethodLabel("random")).toBe("Randomized");
+    expect(assignmentMethodLabel("unknown")).toBe("unknown");
+    expect(reportStatePresentation("live")).toEqual({ label: "Live report", tone: "ok" });
+    expect(reportStatePresentation("frozen")).toEqual({ label: "Report frozen", tone: "neutral" });
+  });
+
+  it("resolves segment ids against the backend catalog", () => {
+    const catalog = [{ id: "unsegmented", label: "Unsegmented", default: true }];
+    expect(segmentLabel("unsegmented", catalog)).toBe("Unsegmented");
+    expect(segmentLabel("NotInCatalog", catalog)).toBe("NotInCatalog");
+    expect(segmentLabel("unsegmented", null)).toBe("unsegmented");
+  });
+
+  it("maps dataset names to readable labels", () => {
+    expect(datasetLabel("Login")).toBe("Logins");
+    expect(datasetLabel("Deposit_events")).toBe("Deposit events");
+    expect(datasetLabel("Data")).toBe("Unrecognised data");
+    expect(datasetLabel("SomethingElse")).toBe("SomethingElse");
   });
 });

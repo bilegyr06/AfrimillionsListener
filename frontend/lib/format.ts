@@ -1,6 +1,8 @@
 // Formatting and label helpers. Business terminology lives here so pages stay
 // declarative and the backend's raw values never leak into the UI.
 
+import type { SegmentOption } from "@/lib/types";
+
 // Locale used by every number/date formatter. Pinned explicitly rather than
 // left to the host default so server renders, exports, tests, and CI are
 // byte-identical no matter where the app runs. The intended business format is
@@ -66,6 +68,40 @@ export function formatPercent(rate: number | null | undefined): string {
 export function formatRatio(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
   return value.toLocaleString(DEFAULT_LOCALE, { maximumFractionDigits: 2 });
+}
+
+// Values that are already percentage points (0–100), e.g. a configured Control
+// %. Distinct from formatPercent, which expects a 0–1 rate.
+export function formatPercentage(points: number | null | undefined): string {
+  if (points === null || points === undefined) return "—";
+  return `${points.toLocaleString(DEFAULT_LOCALE, { maximumFractionDigits: 1 })}%`;
+}
+
+// Human relative time to a deadline ("2d left", "5h left", "Due now",
+// "3d overdue", "Overdue by 2h"). The page supplies its own clock for tests;
+// the default is `now`.
+export function formatRelativeTime(
+  iso: string | null | undefined,
+  now: Date = new Date(),
+): string {
+  if (!iso) return "—";
+  const target = new Date(iso);
+  if (Number.isNaN(target.getTime())) return iso;
+  const diffMs = target.getTime() - now.getTime();
+  const absMs = Math.abs(diffMs);
+  const days = Math.floor(absMs / 86_400_000);
+  const hours = Math.floor((absMs % 86_400_000) / 3_600_000);
+  const minutes = Math.floor((absMs % 3_600_000) / 60_000);
+  if (diffMs < 0) {
+    if (days > 0) return `${days}d overdue`;
+    if (hours > 0) return `Overdue by ${hours}h`;
+    if (minutes > 0) return `Overdue by ${minutes}m`;
+    return "Due now";
+  }
+  if (days > 0) return `${days}d left`;
+  if (hours > 0) return `${hours}h left`;
+  if (minutes > 0) return `${minutes}m left`;
+  return "Due now";
 }
 
 export function formatDuration(seconds: number | null | undefined): string {
@@ -205,4 +241,48 @@ export const RUN_STATUS_LABELS: Record<string, StatusPresentation> = {
 
 export function runStatusPresentation(status: string): StatusPresentation {
   return RUN_STATUS_LABELS[status] ?? { label: status, tone: "neutral" };
+}
+
+export const REPORT_STATE_LABELS: Record<string, StatusPresentation> = {
+  live: { label: "Live report", tone: "ok" },
+  frozen: { label: "Report frozen", tone: "neutral" },
+};
+
+export function reportStatePresentation(state: string): StatusPresentation {
+  return REPORT_STATE_LABELS[state] ?? { label: state, tone: "neutral" };
+}
+
+export const ASSIGNMENT_METHOD_LABELS: Record<string, string> = {
+  deterministic: "Deterministic",
+  random: "Randomized",
+};
+
+export function assignmentMethodLabel(method: string): string {
+  return ASSIGNMENT_METHOD_LABELS[method] ?? method;
+}
+
+// Segment display names come from the backend's /segments catalog; this helper
+// resolves a stored segment id against that catalog and falls back to the raw
+// id so a legacy/unknown value is never mislabelled.
+export function segmentLabel(id: string, catalog: SegmentOption[] | null | undefined): string {
+  const match = catalog?.find((segment) => segment.id === id);
+  return match ? match.label : id;
+}
+
+// Dataset names surfaced by the file registry / source snapshots.
+const DATASET_LABELS: Record<string, string> = {
+  Login: "Logins",
+  Registrations: "Registrations",
+  Sales: "Sales",
+  Deposit_events: "Deposit events",
+  Withdrawal_events: "Withdrawal events",
+  KYC: "KYC verifications",
+  Data: "Unrecognised data",
+  invitations: "Invitations",
+  sessions: "Sessions",
+  unknown: "Unrecognised",
+};
+
+export function datasetLabel(dataset: string): string {
+  return DATASET_LABELS[dataset] ?? dataset;
 }

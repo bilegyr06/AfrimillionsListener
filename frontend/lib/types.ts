@@ -425,8 +425,57 @@ export interface CampaignStatisticsSummary {
 export type WindowStatus = "active" | "ended" | "finalized";
 export type WindowAssignmentMethod = "deterministic" | "random";
 export type RunStatus = "running" | "completed" | "stopped";
+export type ReportState = "live" | "frozen";
 
-export interface CampaignWindowRow {
+// The operator-facing segment catalog served by GET /segments. The UI renders
+// options exactly as the backend listed them; it never owns a segment list.
+export interface SegmentOption {
+  id: string;
+  label: string;
+  default?: boolean;
+}
+
+export interface SegmentsResponse {
+  items: SegmentOption[];
+}
+
+export interface WindowAudienceSplit {
+  total: number;
+  campaign: number;
+  control: number;
+}
+
+// Assignment split, entirely computed by the backend formula. The UI renders
+// both sides of a split ("Campaign: 20% / Control: 80%"); it never inverts or
+// recomputes percentages.
+export interface WindowSplitSide {
+  campaign_percentage: number;
+  control_percentage: number;
+}
+
+export interface WindowSplitSummary {
+  assignment_method: WindowAssignmentMethod;
+  control_override: number | null;
+  recommended: WindowSplitSide | null;
+  effective: WindowSplitSide | null;
+  actual: {
+    campaign_users: number;
+    control_users: number;
+    total_users: number;
+    campaign_percentage: number | null;
+    control_percentage: number | null;
+  };
+}
+
+export interface RunningRun {
+  id: number;
+  status: string;
+  started_at: string | null;
+  note: string | null;
+}
+
+// Fields the campaign_windows row always carries (list + detail + report).
+export interface WindowBase {
   id: number;
   name: string | null;
   status: WindowStatus;
@@ -436,9 +485,119 @@ export interface CampaignWindowRow {
   finalized_at: string | null;
   ended_at: string | null;
   business_timezone: string;
+  selected_segments: string[];
+  assignment_method: WindowAssignmentMethod;
+  suggested_control_percentage: number | null;
   control_percentage: number | null;
+  control_override: number | null;
   eligible_count: number | null;
+  segment_eligible_counts: Record<string, number>;
   created_at: string;
+}
+
+// One row of GET /windows (the enriched overview list).
+export interface CampaignWindowRow extends WindowBase {
+  updated_at: string;
+  audience: WindowAudienceSplit;
+  split: WindowSplitSummary;
+  runs_count: number;
+  running_runs: RunningRun[];
+  report_state: ReportState;
+}
+
+export interface SnapshotFile {
+  dataset: string;
+  filename: string;
+  size_bytes: number;
+  mtime: string;
+  row_count: number;
+}
+
+export interface WindowRunRow {
+  id: number;
+  window_id: number;
+  status: RunStatus;
+  started_at: string | null;
+  ended_at: string | null;
+  stop_reason: string | null;
+  note: string | null;
+  snapshot_id: number | null;
+  created_at: string;
+  snapshot: {
+    captured_at: string | null;
+    files: SnapshotFile[];
+  };
+}
+
+// GET /windows/{id}: window + audience + split + runs (each with its frozen
+// snapshot) + report_state.
+export interface WindowDetail extends WindowBase {
+  updated_at: string;
+  audience: WindowAudienceSplit;
+  split: WindowSplitSummary;
+  runs: WindowRunRow[];
+  report_state: ReportState;
+}
+
+// POST /windows create response: the persisted window row (same scalar fields).
+export interface CreateWindowResponse extends WindowBase {
+  updated_at: string;
+}
+
+// GET /windows/{id}/data-state: current source files vs each run's snapshot.
+export interface RunDataState {
+  id: number;
+  status: string;
+  started_at: string | null;
+  ended_at: string | null;
+  note: string | null;
+  snapshot_captured_at: string | null;
+  snapshot_files: SnapshotFile[];
+}
+
+export interface WindowDataState {
+  window_id: number;
+  status: WindowStatus;
+  finalized_at: string | null;
+  finalization_deadline: string;
+  report_state: ReportState;
+  captured_at: string;
+  current_files: SnapshotFile[];
+  runs: RunDataState[];
+}
+
+// POST /runs/{id}/dispatch summarised SMS execution for one dispatch pass.
+export interface DispatchResult {
+  run_id: number;
+  window_id: number;
+  run_status: string;
+  dispatched_at: string;
+  target: number;
+  already_sent: number;
+  skipped_cooldown: number;
+  skipped_cap: number;
+  sent: number;
+  failed: number;
+  deferred: number;
+}
+
+// POST /runs/{id}/evaluate audience-evaluation summary.
+export interface EvaluateRunResponse {
+  run_id: number;
+  window_id: number;
+  window_status: string;
+  evaluated_at: string;
+  candidates: number;
+  decisions: Record<string, number>;
+  members_by_segment: Record<string, number>;
+  audience: {
+    added: number;
+    existing: number;
+    campaign: number;
+    control: number;
+    invalid_phone: number;
+  };
+  eligible_count: number | null;
 }
 
 export interface CampaignRunSummary {
