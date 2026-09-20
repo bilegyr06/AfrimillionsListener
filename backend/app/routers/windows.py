@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.db.windows import WindowConfigError, WindowStateError
-from app.services import eligibility, execution, windows as svc
+from app.services import eligibility, execution, segments, windows as svc
 
 router = APIRouter(tags=["campaign-windows"])
 
@@ -84,15 +84,30 @@ def create_window(req: CreateWindowRequest):
         raise _http(exc)
 
 
+@router.get("/segments")
+def list_segments():
+    """The segment catalog for Window configuration (ids + labels + default)."""
+    return {"items": segments.list_segments()}
+
+
 @router.get("/windows")
 def list_windows(limit: int = 50):
-    return svc.list_windows(limit)
+    return svc.list_windows_overview(limit)
 
 
 @router.get("/windows/{window_id}")
 def window_detail(window_id: int):
     try:
         return svc.get_window_detail(window_id)
+    except WindowStateError as exc:
+        raise _http(exc)
+
+
+@router.get("/windows/{window_id}/data-state")
+def window_data_state(window_id: int):
+    """Current source-data state for a Window (files now vs Runs' snapshots)."""
+    try:
+        return svc.get_window_data_state(window_id)
     except WindowStateError as exc:
         raise _http(exc)
 

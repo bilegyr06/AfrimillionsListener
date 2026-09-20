@@ -187,19 +187,149 @@ def get_window(window_id: int) -> dict | None:
     return db.get_window(window_id)
 
 
+def _split_summary(window: dict, audience: dict) -> dict:
+    """Recommended vs effective vs actual Campaign/Control split for a window.
+
+    All percentages come from the backend formula: the recommmeded split uses
+    the stored `suggested_control_percentage`, the effective split uses the
+    stored `control_percentage` (suggestion or operator override), and the
+    actual split derives from the assigned audience counts. The frontend only
+    renders this; it never recomputes a percentage.
+    """
+    suggested = window.get("suggested_control_percentage")
+    effective = window.get("control_percentage")
+    total = audience.get("total", 0)
+    campaign = audience.get("campaign", 0)
+    control = audience.get("control", 0)
+    actual_campaign_pct = round(campaign / total * 100.0, 2) if total else None
+    actual_control_pct = round(control / total * 100.0, 2) if total else None
+    return {
+        "assignment_method": window.get("assignment_method"),
+        "control_override": window.get("control_override"),
+        "recommended": {
+            "campaign_percentage": round(campaign_percentage_for(suggested), 2),
+            "control_percentage": round(suggested, 2),
+        }
+        if suggested is not None
+        else None,
+        "effective": {
+            "campaign_percentage": round(campaign_percentage_for(effective), 2),
+            "control_percentage": round(effective, 2),
+        }
+        if effective is not None
+        else None,
+        "actual": {
+            "campaign_users": campaign,
+            "control_users": control,
+            "total_users": total,
+            "campaign_percentage": actual_campaign_pct,
+            "control_percentage": actual_control_pct,
+        },
+    }
+
+
 def list_windows(limit: int = 50) -> list[dict]:
     return db.list_windows(limit)
 
 
-def get_window_detail(window_id: int) -> dict:
-    """Window plus audience counts and its runs (for API/dashboard reads)."""
+def list_windows_overview(limit: int = 50) -> list[dict]:
+    """Window list rows enriched for the operator surface.
+
+    Each row carries its audience split and Run activity so the Windows list
+    can answer "what is this Window right now?" without a second round-trip per
+    window: audience (campaign/control/total), runs_count, running run ids and
+    the report state (live while not finalized, frozen once finalized).
+    """
+    windows = db.list_windows(limit)
+    out = []
+    for window in windows:
+        runs = db.list_runs(window["id"])
+        audience = db.count_audience(window["id"])
+        running = [r for r in runs if r["status"] == "running"]
+        out.append(
+            {
+                **window,
+                "audience": audience,
+                "split": _split_summary(window, audience),
+                "runs_count": len(runs),
+                "running_runs": [
+                    {
+                        "id": r["id"],
+                        "status": r["status"],
+                        "started_at": r["started_at"],
+                        "note": r.get("note"),
+                    }
+                    for r in running
+                ],
+                "report_state": "frozen" if window["status"] == "finalized" else "live",
+            }
+        )
+    return out
+
+
+def get_window_data_state(window_id: int) -> dict:
+    """Source-data state for a Window: what files exist now vs what its Runs froze.
+
+    Combines the current data-folder capture (what a future Run would snapshot)
+    with every Run's frozen snapshot (which files each Run is bound to), so the
+    operator can see that a new upload is available to a future evaluation while
+    existing Runs stay on their original snapshot.
+    """
     window = db.get_window(window_id)
     if window is None:
         raise WindowStateError(f"Campaign Window #{window_id} not found.")
+    current = capture_source_snapshot(window_id)
+    runs = db.list_runs(window_id)
+    run_states = []
+    for run in runs:
+        snapshot = db.get_run_snapshot(run["id"])
+        run_states.append(
+            {
+                "id": run["id"],
+                "status": run["status"],
+                "started_at": run["started_at"],
+                "ended_at": run.get("ended_at"),
+                "note": run.get("note"),
+                "snapshot_captured_at": snapshot["captured_at"] if snapshot else None,
+                "snapshot_files": snapshot["files"] if snapshot else [],
+            }
+        )
+    return {
+        "window_id": window_id,
+        "status": window["status"],
+        "finalized_at": window.get("finalized_at"),
+        "finalization_deadline": window["finalization_deadline"],
+        "report_state": "frozen" if window["status"] == "finalized" else "live",
+        "captured_at": dates.to_utc_iso(dates.now_business()),
+        "current_files": current,
+        "runs": run_states,
+    }
+
+
+def get_window_detail(window_id: int) -> dict:
+    """Window plus audience counts, its runs and each run's frozen snapshot.
+
+    Used for the operator workspace: the runs carry `snapshot` (captured_at +
+    files) so the page can show the "this Run is bound to its snapshot" state
+    without a per-run call.
+    """
+    window = db.get_window(window_id)
+    if window is None:
+        raise WindowStateError(f"Campaign Window #{window_id} not found.")
+    runs = db.list_runs(window_id)
+    for run in runs:
+        snapshot = db.get_run_snapshot(run["id"])
+        run["snapshot"] = {
+            "captured_at": snapshot["captured_at"] if snapshot else None,
+            "files": snapshot["files"] if snapshot else [],
+        }
+    audience = db.count_audience(window_id)
     return {
         **window,
-        "audience": db.count_audience(window_id),
-        "runs": db.list_runs(window_id),
+        "audience": audience,
+        "split": _split_summary(window, audience),
+        "runs": runs,
+        "report_state": "frozen" if window["status"] == "finalized" else "live",
     }
 
 

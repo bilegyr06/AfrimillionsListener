@@ -551,3 +551,52 @@ class TestWindowAPI:
         assert r.status_code == 200
         assert r.json()["added"] == 1
         assert client.get(f"/windows/{w['id']}/audience/count").json()["total"] == 1
+
+    def test_segments_catalog(self, client):
+        r = client.get("/segments").json()
+        assert r["items"][0] == {"id": "unsegmented", "label": "Unsegmented", "default": True}
+        ids = {item["id"] for item in r["items"]}
+        assert "NewPlayedPlayers" in ids
+        assert "DepositedNoPlayUnder100Days" in ids
+        assert any(not item["default"] for item in r["items"])
+
+    def test_window_list_overview_includes_audience_split_and_state(self, client):
+        w = client.post("/windows", json={"name": "W4"}).json()
+        client.post(f"/windows/{w['id']}/eligible-count", json={"eligible_count": 1000})
+        client.post(
+            f"/windows/{w['id']}/audience",
+            json=[{"user_id": "10", "segment_id": "unsegmented", "phone": "08012345678"}],
+        )
+        client.post(f"/windows/{w['id']}/runs", json={"note": "alpha"})
+        rows = client.get("/windows").json()
+        assert rows
+        row = next(r for r in rows if r["id"] == w["id"])
+        assert row["status"] == "active"
+        assert row["report_state"] == "live"
+        assert row["audience"]["total"] == 1
+        assert row["runs_count"] == 1
+        assert row["running_runs"][0]["note"] == "alpha"
+        assert "split" in row
+        assert row["split"]["recommended"] is not None
+        assert row["split"]["effective"] is not None
+        assert row["split"]["actual"]["campaign_users"] + row["split"]["actual"]["control_users"] == 1
+        assert row["split"]["assignment_method"] == "deterministic"
+
+    def test_window_detail_snapshot_enrichment(self, client):
+        w = client.post("/windows", json={"name": "W5"}).json()
+        run = client.post(f"/windows/{w['id']}/runs", json={"note": "go"}).json()["run"]
+        detail = client.get(f"/windows/{w['id']}").json()
+        assert detail["runs"][0]["id"] == run["id"]
+        assert detail["runs"][0]["snapshot"]["captured_at"] is not None
+        assert detail["report_state"] == "live"
+
+    def test_window_data_state(self, client):
+        w = client.post("/windows", json={"name": "W6"}).json()
+        run = client.post(f"/windows/{w['id']}/runs", json={"note": "go"}).json()["run"]
+        state = client.get(f"/windows/{w['id']}/data-state").json()
+        assert state["window_id"] == w["id"]
+        assert state["status"] == "active"
+        assert "current_files" in state
+        run_state = state["runs"][0]
+        assert run_state["id"] == run["id"]
+        assert run_state["snapshot_captured_at"] is not None

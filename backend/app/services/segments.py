@@ -66,6 +66,30 @@ SEGMENT_LABELS: dict[str, str] = {
     DEPOSITED_NO_PLAY_UNDER_100_DAYS: "Deposited No Play (< 100 days since last deposit)",
 }
 
+#: The fallback segment owned by the Window/eligibility service: an eligible
+#: user who matches no defined segment is admitted as "unsegmented". It is the
+#: default (and today's main operational) Window selection.
+SEGMENT_CATALOG_DEFAULT = "unsegmented"
+
+
+def list_segments() -> list[dict]:
+    """The operator-facing segment catalog for Window configuration.
+
+    The default `unsegmented` population comes first, then the defined segments
+    in the source build order. Each entry carries the id the backend stores on
+    the window plus a human label; the frontend never duplicates this catalog.
+    """
+    default = {
+        "id": SEGMENT_CATALOG_DEFAULT,
+        "label": "Unsegmented",
+        "default": True,
+    }
+    defined = [
+        {"id": seg_id, "label": SEGMENT_LABELS.get(seg_id, seg_id), "default": False}
+        for seg_id in SEGMENT_IDS
+    ]
+    return [default, *defined]
+
 # ---------------------------------------------------------------------------
 # Lifecycle stage + value tier vocabulary
 # ---------------------------------------------------------------------------
