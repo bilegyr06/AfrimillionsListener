@@ -226,12 +226,10 @@ async def sync_delivery_statuses(
             cost = entry.get("amount")
             new_status = _normalize_termii_status(termii_status)
 
-            if new_status != record["status"]:
+            if new_status != record["status"] or cost is not None and cost > 0:
                 update_sms_status(message_id, new_status, cost)
                 updated += 1
-            elif cost is not None and cost > 0:
-                update_sms_status(message_id, new_status, cost)
-                updated += 1
+
         except Exception as e:
             print(f"Failed to sync status for message {message_id}: {e}")
             errors += 1
