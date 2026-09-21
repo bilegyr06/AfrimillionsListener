@@ -9,9 +9,10 @@ Window pipeline against a running Run's frozen source snapshot:
      additionally persisted via idempotent ingestion (scoped by source_file)
      so the durable fact tables stay the queryable source of truth.
   2. Candidates: users whose LATEST login in the Login snapshot falls inside
-     the fixed one-hour band [now-(H+1)h, now-H) Africa/Lagos (a login older
-     than H hours is "not hot anymore"; a login younger than exactly H hours is
-     still being evaluated). H = the operator setting WELCOME_LOGIN_AGE_HOURS.
+     the fixed one-hour band (now-(H+1)h, now-H] Africa/Lagos. The low edge is
+     EXCLUSIVE (a login exactly H+1 hours old is "not hot anymore"); the high
+     edge is INCLUSIVE (a login exactly H hours old is still being evaluated).
+     H = the operator setting WELCOME_LOGIN_AGE_HOURS.
   3. Membership: each candidate's segment is evaluated from its player profile
      (lifecycle stage + tier + registration/today/last-week evidence) in the
      authoritative build order (app.services.segments). A member is only
@@ -45,8 +46,8 @@ from app.db import windows as db
 from app.db.deposits import select_deposits
 from app.db.players import select_plays
 from app.db.sms import get_last_accepted_sms
-from app.db.windows import WindowStateError
-from app.services import segments, windows as svc
+from app.db.windows import WindowStateError, get_run, get_run_snapshot, get_window
+from app.services import segments
 from app.services.players_facts import build_player_facts
 
 #: Datasets captured by run_snapshots (c.f. windows._SNAPSHOT_PREFIX_TO_DATASET).
@@ -55,7 +56,7 @@ DATASET_REGISTRATIONS = "Registrations"
 DATASET_SALES = "Sales"
 DATASET_DEPOSITS = "Deposit_events"
 
-UNSEGMENTED = svc.UNSEGMENTED
+UNSEGMENTED = "unsegmented"
 
 
 def _snapshot_partition(files: list[dict]) -> dict:
@@ -184,7 +185,7 @@ def _scoped(names: list[str]) -> list[str]:
 
 
 def _login_band(now: datetime, hours: int) -> tuple[datetime, datetime]:
-    """The current-welcome one-hour login band [now-(H+1)h, now-H)."""
+    """The current-welcome one-hour login band (now-(H+1)h, now-H]."""
     high = now - timedelta(hours=hours)
     low = high - timedelta(hours=1)
     return low, high
@@ -250,7 +251,7 @@ def evaluate_run(run_id: int, *, now: datetime | None = None) -> dict:
         uid, ts = lr["user_id"], lr["logged_at"]
         if seg_start <= ts < seg_end:
             last_week_login[uid] = True
-        if band_low <= ts < band_high:
+        if band_low < ts <= band_high:
             prev = candidates.get(uid)
             if prev is None or ts > prev:
                 candidates[uid] = ts
@@ -334,18 +335,203 @@ def evaluate_run(run_id: int, *, now: datetime | None = None) -> dict:
     # Auto-config N when control not yet configured, so assignment can run.
     window = db.get_window(window_id)
     if window is not None and window["control_percentage"] is None and members:
-        svc.set_eligible_count(window_id, len(members), dict(members_by_segment))
+        from app.services.windows import set_eligible_count as _set_eligible_count
+        _set_eligible_count(window_id, len(members), dict(members_by_segment))
 
     added: dict = {"added": 0, "existing": 0, "campaign": 0, "control": 0, "invalid_phone": 0}
     if members:
-        added = svc.add_eligible_users(window_id, members)
+        from app.services.windows import add_eligible_users as _add_eligible_users
+        added = _add_eligible_users(window_id, members)
 
-    refreshed = svc.refresh_eligible_counts(window_id)
+    from app.services.windows import refresh_eligible_counts as _refresh_eligible_counts
+    refreshed = _refresh_eligible_counts(window_id)
 
     return {
         "run_id": run_id,
         "window_id": window_id,
         "window_status": db.get_window(window_id)["status"],
+        "evaluated_at": dates.to_utc_iso(now),
+        "reference_windows": {
+            "timezone": dates.BUSINESS_TIMEZONE,
+            "login_band_start": dates.to_utc_iso(band_low),
+            "login_band_end": dates.to_utc_iso(band_high),
+            "login_age_hours": login_age_hours,
+            "segment_week_start": dates.to_utc_iso(seg_start),
+            "segment_week_end": dates.to_utc_iso(seg_end),
+            "today_start": dates.to_utc_iso(today),
+            "onboarding_start": dates.to_utc_iso(onboarding),
+        },
+        "snapshot_scope": {
+            "login_files": len(partition[DATASET_LOGIN]),
+            "registrations_file": partition[DATASET_REGISTRATIONS][-1]
+            if partition[DATASET_REGISTRATIONS]
+            else None,
+            "sales_files": len(partition[DATASET_SALES]),
+            "deposit_files": len(partition[DATASET_DEPOSITS]),
+        },
+        "candidates": len(candidates),
+        "decisions": dict(decisions),
+        "members_by_segment": dict(members_by_segment),
+        "audience": added,
+        "eligible_count": refreshed["eligible_count"] if refreshed else None,
+        "details": detail,
+    }
+
+
+def build_run_target(
+    run_id: int,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """Evaluate eligibility and build the complete Run target at start time.
+
+    This is the single evaluation step that establishes the Run's frozen target.
+    It is called once from start_run and must not be called again for the same Run.
+
+    Returns the evaluation report (same structure as evaluate_run).
+    """
+    run = get_run(run_id)
+    if run is None:
+        raise WindowStateError(f"Campaign Run #{run_id} not found.")
+    if run["status"] != "running":
+        raise WindowStateError(
+            f"Cannot build target for Campaign Run #{run_id}: status is {run['status']!r}."
+        )
+    window_id = run["window_id"]
+    window = get_window(window_id)
+    if window is None:
+        raise WindowStateError(f"Campaign Window #{window_id} not found.")
+
+    snapshot_rows = get_run_snapshot(run_id)
+    if snapshot_rows is None:
+        raise WindowStateError(f"Run snapshot not found for Campaign Run #{run_id}.")
+    partition = _snapshot_partition(snapshot_rows.get("files", []))
+    _ingest_snapshot_sources(partition)
+
+    # Reference windows (all Africa/Lagos).
+    now = dates.as_business(now) if now is not None else dates.now_business()
+    seg_start, seg_end = segments.segment_week_bounds(now)
+    today = segments.today_start(now)
+    onboarding = segments.onboarding_start(now)
+    band_low, band_high = _login_band(now, settings.WELCOME_LOGIN_AGE_HOURS)
+
+    # Snapshot-scoped facts.
+    login_rows = _read_login_rows(partition[DATASET_LOGIN])
+    reg_map = _read_registrations(partition[DATASET_REGISTRATIONS])
+    plays_by_user, deposits_by_user = build_player_facts(
+        select_plays(_scoped(partition[DATASET_SALES])),
+        select_deposits(_scoped(partition[DATASET_DEPOSITS])),
+    )
+
+    selected = set(window["selected_segments"])
+    login_age_hours = int(settings.WELCOME_LOGIN_AGE_HOURS)
+
+    # Latest login per user strictly inside the band -> candidates (deduped).
+    candidates: dict[str, datetime] = {}
+    last_week_login: dict[str, bool] = {}
+    for lr in login_rows:
+        uid, ts = lr["user_id"], lr["logged_at"]
+        if seg_start <= ts < seg_end:
+            last_week_login[uid] = True
+        if band_low < ts <= band_high:
+            prev = candidates.get(uid)
+            if prev is None or ts > prev:
+                candidates[uid] = ts
+
+    decisions = {
+        "not_registered": 0,
+        "in_onboarding_cohort": 0,
+        "not_in_selected_segment": 0,
+        "played_since_login": 0,
+        "cooldown_active": 0,
+        "eligible": 0,
+    }
+    detail: list[dict] = []
+    members: list[dict] = []
+    members_by_segment: dict[str, int] = {}
+
+    for user_id, login_at in candidates.items():
+        reg = reg_map.get(user_id)
+        reason = None
+        segment = None
+
+        if reg is None:
+            reason = "not_registered"
+            decisions["not_registered"] += 1
+        elif reg.get("timestamp") is not None and reg["timestamp"] >= onboarding:
+            reason = "in_onboarding_cohort"
+            decisions["in_onboarding_cohort"] += 1
+        else:
+            profile = segments.compute_profile(
+                user_id,
+                reg,
+                plays_by_user.get(user_id, []),
+                deposits_by_user.get(user_id, []),
+                now,
+            )
+            segment = segments.evaluate_membership(
+                now,
+                profile,
+                logged_in_last_week=last_week_login.get(user_id, False),
+                played_last_week=_in_week(plays_by_user.get(user_id, []), seg_start, seg_end),
+                played_today=_in_week(plays_by_user.get(user_id, []), today, None),
+                in_onboarding_cohort=False,
+            )
+            if segment is None:
+                segment = UNSEGMENTED
+
+            if segment not in selected:
+                reason = "not_in_selected_segment"
+                decisions["not_in_selected_segment"] += 1
+            elif _play_disqualified(plays_by_user.get(user_id, []), login_at):
+                reason = "played_since_login"
+                decisions["played_since_login"] += 1
+            elif _in_cooldown(user_id, now):
+                reason = "cooldown_active"
+                decisions["cooldown_active"] += 1
+            else:
+                reason = "eligible"
+                decisions["eligible"] += 1
+                members_by_segment[segment] = members_by_segment.get(segment, 0) + 1
+                members.append(
+                    {
+                        "user_id": user_id,
+                        "segment_id": segment,
+                        "phone": reg.get("phone"),
+                        "run_id": run_id,
+                        "eligibility_state": _eligibility_state(
+                            login_at, segment, profile, reg, window_id, run_id
+                        ),
+                    }
+                )
+
+        detail.append(
+            {
+                "user_id": user_id,
+                "login_at": dates.to_utc_iso(login_at),
+                "decision": reason,
+                "segment": segment,
+            }
+        )
+
+    # Auto-config N when control not yet configured, so assignment can run.
+    window = get_window(window_id)
+    if window is not None and window["control_percentage"] is None and members:
+        from app.services.windows import set_eligible_count as _set_eligible_count
+        _set_eligible_count(window_id, len(members), dict(members_by_segment))
+
+    added: dict = {"added": 0, "existing": 0, "campaign": 0, "control": 0, "invalid_phone": 0}
+    if members:
+        from app.services.windows import add_eligible_users as _add_eligible_users
+        added = _add_eligible_users(window_id, members)
+
+    from app.services.windows import refresh_eligible_counts as _refresh_eligible_counts
+    refreshed = _refresh_eligible_counts(window_id)
+
+    return {
+        "run_id": run_id,
+        "window_id": window_id,
+        "window_status": get_window(window_id)["status"],
         "evaluated_at": dates.to_utc_iso(now),
         "reference_windows": {
             "timezone": dates.BUSINESS_TIMEZONE,

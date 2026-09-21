@@ -79,8 +79,8 @@ class Settings:
     DEPOSIT_FILE_PATTERN: str = "Deposit_events_*.csv"
 
     # Campaign Window eligibility: a login qualifies only inside a fixed
-    # one-hour band [now - (H+1)h, now - H). H is configurable; the band itself
-    # is always one hour wide.
+    # one-hour band (now - (H+1)h, now - H] (low edge exclusive, high edge
+    # inclusive). H is configurable; the band itself is always one hour wide.
     WELCOME_LOGIN_AGE_HOURS: int = int(os.getenv("WELCOME_LOGIN_AGE_HOURS", 3))
 
 

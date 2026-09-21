@@ -24,7 +24,7 @@ LAGOS = ZoneInfo("Africa/Lagos")
 
 #: Evaluation instant (Africa/Lagos) used by every test scenario.
 NOW = datetime(2026, 9, 19, 18, 30, tzinfo=LAGOS)
-#: Login band with H=3 -> [2026-09-19 14:30, 15:30).
+#: Login band with H=3 -> (2026-09-19 14:30, 15:30] (low exclusive, high inclusive).
 NEVER_DEPOSITED = "NeverDepositedUnder400Hrs"
 MID_TIER = "MidTierInactive"
 
@@ -279,7 +279,7 @@ class TestEvaluateRun:
             eligibility.evaluate_run(run_id, now=NOW)
 
     def test_band_edges(self, _init_db, _fixed_bands):
-        # H=3 -> band [14:30, 15:30): lower bound inclusive, upper exclusive.
+        # H=3 -> band (14:30, 15:30]: lower bound exclusive, upper inclusive.
         data_dir = settings.DATA_FOLDER
         _write_csv(
             data_dir,
@@ -287,9 +287,9 @@ class TestEvaluateRun:
             ["userId", "timestamp"],
             [
                 ("1", "2026-09-19 14:29:59"),   # too old
-                ("2", "2026-09-19 14:30:00"),   # on the lower edge -> in
+                ("2", "2026-09-19 14:30:00"),   # on the lower edge -> out (exclusive)
                 ("3", "2026-09-19 15:29:59"),   # inside
-                ("4", "2026-09-19 15:30:00"),   # upper edge -> out (exclusive)
+                ("4", "2026-09-19 15:30:00"),   # upper edge -> in (inclusive)
                 ("5", "2026-09-19 18:29:00"),   # fresher than H hours
             ],
         )
@@ -298,8 +298,8 @@ class TestEvaluateRun:
             "Registrations_20260910.csv",
             ["userId", "firstName", "email", "phone", "timestamp"],
             [
-                ("2", "Bob", "b@x.com", "08023456789", "2026-09-10 10:00:00"),
                 ("3", "Cara", "c@x.com", "08034567890", "2026-09-10 10:00:00"),
+                ("4", "Dara", "d@x.com", "08045678901", "2026-09-10 10:00:00"),
             ],
         )
         win = _new_window()
@@ -309,7 +309,7 @@ class TestEvaluateRun:
 
         # Only the two in-band logins are candidates; both are eligible.
         assert report["candidates"] == 2
-        assert {d["user_id"] for d in report["details"] if d["decision"] == "eligible"} == {"2", "3"}
+        assert {d["user_id"] for d in report["details"] if d["decision"] == "eligible"} == {"3", "4"}
         assert report["decisions"]["not_registered"] == 0
         assert report["audience"]["added"] == 2
 
