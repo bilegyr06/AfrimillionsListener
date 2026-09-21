@@ -16,7 +16,7 @@ Window pipeline against a running Run's frozen source snapshot:
   3. Membership: each candidate's segment is evaluated from its player profile
      (lifecycle stage + tier + registration/today/last-week evidence) in the
      authoritative build order (app.services.segments). A member is only
-     admitted when its segment is among the windores selected_segments;
+     admitted when its segment is among the run's selected_segments;
      a candidate in the current WeekToDate onboarding cohort is excluded from
      all defined segments (never added to the audience by this step).
   4. Gates, in order: registered, onboarding cohort, selected segment,
@@ -216,8 +216,7 @@ def evaluate_run(run_id: int, *, now: datetime | None = None) -> dict:
             "only running runs may be evaluated."
         )
     window_id = run["window_id"]
-    window = db.get_window(window_id)
-    if window is None:
+    if db.get_window(window_id) is None:
         raise WindowStateError(f"Campaign Window #{window_id} not found.")
 
     snapshot_rows = db.get_run_snapshot(run_id)
@@ -240,7 +239,7 @@ def evaluate_run(run_id: int, *, now: datetime | None = None) -> dict:
         select_deposits(_scoped(partition[DATASET_DEPOSITS])),
     )
 
-    selected = set(window["selected_segments"])
+    selected = set(run["selected_segments"])
     defined = set(segments.SEGMENT_IDS)
     login_age_hours = int(settings.WELCOME_LOGIN_AGE_HOURS)
 
@@ -398,8 +397,7 @@ def build_run_target(
             f"Cannot build target for Campaign Run #{run_id}: status is {run['status']!r}."
         )
     window_id = run["window_id"]
-    window = get_window(window_id)
-    if window is None:
+    if get_window(window_id) is None:
         raise WindowStateError(f"Campaign Window #{window_id} not found.")
 
     snapshot_rows = get_run_snapshot(run_id)
@@ -423,7 +421,7 @@ def build_run_target(
         select_deposits(_scoped(partition[DATASET_DEPOSITS])),
     )
 
-    selected = set(window["selected_segments"])
+    selected = set(run["selected_segments"])
     login_age_hours = int(settings.WELCOME_LOGIN_AGE_HOURS)
 
     # Latest login per user strictly inside the band -> candidates (deduped).

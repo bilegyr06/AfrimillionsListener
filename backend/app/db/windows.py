@@ -180,6 +180,18 @@ def _decode_window(window: dict | None) -> dict | None:
     return window
 
 
+def _decode_run(run: dict | None) -> dict | None:
+    """Inflate JSON columns of a run/persistence row."""
+    if run is None:
+        return None
+    if "selected_segments" in run and isinstance(run["selected_segments"], str):
+        try:
+            run["selected_segments"] = json.loads(run["selected_segments"])
+        except (TypeError, ValueError):
+            run["selected_segments"] = []
+    return run
+
+
 def update_window_control(
     window_id: int,
     *,
@@ -426,6 +438,7 @@ def finalize_window_transition(window_id: int, finalized_at: str) -> dict:
 
 def create_run_with_snapshot(
     window_id: int,
+    selected_segments: list[str],
     run_created_at: str,
     started_at: str,
     note: str | None,
@@ -436,7 +449,9 @@ def create_run_with_snapshot(
 
     The run is created 'running' only when the window is still active (a Run
     must never start in an ended or finalized window). The snapshot row is
-    inserted first so the run references it. Both are atomic.
+    inserted first so the run references it. Both are atomic. The run's
+    selected_segments (its segment scope, frozen at start) is persisted here
+    and never mutated afterward.
     """
     conn = _tx()
     try:
@@ -470,10 +485,18 @@ def create_run_with_snapshot(
         run_cursor = conn.execute(
             """
             INSERT INTO campaign_runs (
-                window_id, status, started_at, note, snapshot_id, created_at
-            ) VALUES (?, 'running', ?, ?, ?, ?)
+                window_id, status, started_at, note, snapshot_id,
+                selected_segments, created_at
+            ) VALUES (?, 'running', ?, ?, ?, ?, ?)
             """,
-            (window_id, started_at, note, snapshot_id, run_created_at),
+            (
+                window_id,
+                started_at,
+                note,
+                snapshot_id,
+                json.dumps(selected_segments, sort_keys=True),
+                run_created_at,
+            ),
         )
         run_id = run_cursor.lastrowid
         conn.execute(
@@ -498,7 +521,7 @@ def create_run_with_snapshot(
                 "SELECT * FROM run_snapshots WHERE id = ?", (snapshot_id,)
             ).fetchone()
         )
-        return _decode_snapshot(snapshot), run
+        return _decode_snapshot(snapshot), _decode_run(run)
     except Exception:
         conn.rollback()
         raise
@@ -510,7 +533,7 @@ def get_run(run_id: int) -> dict | None:
     conn = get_connection()
     row = conn.execute("SELECT * FROM campaign_runs WHERE id = ?", (run_id,)).fetchone()
     conn.close()
-    return _row_to_dict(row)
+    return _decode_run(_row_to_dict(row))
 
 
 def list_runs(window_id: int) -> list[dict]:
@@ -520,7 +543,7 @@ def list_runs(window_id: int) -> list[dict]:
         (window_id,),
     ).fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+    return [_decode_run(dict(row)) for row in rows]
 
 
 def stop_run_transition(run_id: int, ended_at: str, stop_reason: str) -> dict:
@@ -542,10 +565,12 @@ def stop_run_transition(run_id: int, ended_at: str, stop_reason: str) -> dict:
             (ended_at, stop_reason, run_id),
         )
         conn.commit()
-        return dict(
-            conn.execute(
-                "SELECT * FROM campaign_runs WHERE id = ?", (run_id,)
-            ).fetchone()
+        return _decode_run(
+            dict(
+                conn.execute(
+                    "SELECT * FROM campaign_runs WHERE id = ?", (run_id,)
+                ).fetchone()
+            )
         )
     except Exception:
         conn.rollback()
@@ -573,10 +598,12 @@ def complete_run_transition(run_id: int, ended_at: str) -> dict:
             (ended_at, run_id),
         )
         conn.commit()
-        return dict(
-            conn.execute(
-                "SELECT * FROM campaign_runs WHERE id = ?", (run_id,)
-            ).fetchone()
+        return _decode_run(
+            dict(
+                conn.execute(
+                    "SELECT * FROM campaign_runs WHERE id = ?", (run_id,)
+                ).fetchone()
+            )
         )
     except Exception:
         conn.rollback()

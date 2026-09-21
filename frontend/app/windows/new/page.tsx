@@ -4,18 +4,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import Notice from "@/components/notice";
-import { ErrorBlock, Loading } from "@/components/state-ui";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiPost } from "@/lib/api";
 import { assignmentMethodLabel } from "@/lib/format";
-import type { CreateWindowResponse, SegmentsResponse } from "@/lib/types";
-import { useQuery } from "@/lib/use-query";
-
-const DEFAULT_SEGMENTS = ["unsegmented"];
+import type { CreateWindowResponse } from "@/lib/types";
 
 export default function NewWindowPage() {
   const router = useRouter();
   const [name, setName] = useState("");
-  const [selected, setSelected] = useState<string[]>(DEFAULT_SEGMENTS);
   const [override, setOverride] = useState<string>("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
@@ -23,19 +18,7 @@ export default function NewWindowPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const segments = useQuery<SegmentsResponse>(() => apiGet("/segments"), []);
-
-  function toggleSegment(id: string) {
-    setSelected((current) =>
-      current.includes(id) ? current.filter((s) => s !== id) : [...current, id],
-    );
-  }
-
   async function handleSubmit() {
-    if (selected.length === 0) {
-      setError("Select at least one segment for this window.");
-      return;
-    }
     setBusy(true);
     setError(null);
     const parsedOverride = override.trim() === "" ? null : Number(override);
@@ -47,7 +30,6 @@ export default function NewWindowPage() {
     try {
       const created = await apiPost<CreateWindowResponse>("/windows", {
         name: name.trim() === "" ? null : name.trim(),
-        segments: selected,
         assignment_method: "deterministic",
         control_override: parsedOverride,
         start_time: start || null,
@@ -59,19 +41,6 @@ export default function NewWindowPage() {
       setError(err instanceof Error ? err.message : "Could not create the window.");
       setBusy(false);
     }
-  }
-
-  if (segments.loading && !segments.data) {
-    return (
-      <div className="page">
-        <div className="page-head">
-          <h1>New campaign window</h1>
-        </div>
-        <div className="section">
-          <Loading text={"Loading segments..."} />
-        </div>
-      </div>
-    );
   }
 
   return (
@@ -138,36 +107,6 @@ export default function NewWindowPage() {
               <span className="field-hint">Leave empty for the default (Sunday 14:00).</span>
             </label>
           </div>
-        </div>
-      </section>
-
-      <section className="section">
-        <div className="section-head">
-          <h2>Segments</h2>
-          <span className="muted" style={{ fontSize: 12.5 }}>
-            A run uses this window&apos;s segment scope.
-          </span>
-        </div>
-        <div className="section-body">
-          {segments.error ? (
-            <ErrorBlock message="We couldn't load the segment catalog." onRetry={segments.reload} />
-          ) : (
-            <div className="checkbox-list">
-              {(segments.data?.items ?? []).map((segment) => (
-                <label key={segment.id} className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(segment.id)}
-                    onChange={() => toggleSegment(segment.id)}
-                  />
-                  <span>
-                    {segment.label}
-                    {segment.default ? <span className="muted"> default</span> : null}
-                  </span>
-                </label>
-              ))}
-            </div>
-          )}
         </div>
       </section>
 

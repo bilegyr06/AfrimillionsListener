@@ -22,7 +22,6 @@ class CreateWindowRequest(BaseModel):
     start_time: datetime | None = None
     end_time: datetime | None = None
     finalization_deadline: datetime | None = None
-    segments: list[str] | None = None
     assignment_method: str = "deterministic"
     control_override: float | None = None
 
@@ -41,6 +40,7 @@ class ControlOverrideRequest(BaseModel):
 
 
 class StartRunRequest(BaseModel):
+    segments: list[str] | None = None
     note: str | None = Field(None, max_length=500)
 
 
@@ -76,7 +76,6 @@ def create_window(req: CreateWindowRequest):
             start_time=req.start_time,
             end_time=req.end_time,
             finalization_deadline=req.finalization_deadline,
-            segments=req.segments,
             assignment_method=req.assignment_method,
             control_override=req.control_override,
         )
@@ -86,7 +85,7 @@ def create_window(req: CreateWindowRequest):
 
 @router.get("/segments")
 def list_segments():
-    """The segment catalog for Window configuration (ids + labels + default)."""
+    """The segment catalog for Run configuration (ids + labels + default)."""
     return {"items": segments.list_segments()}
 
 
@@ -177,7 +176,11 @@ def set_control_override(window_id: int, req: ControlOverrideRequest):
 @router.post("/windows/{window_id}/runs")
 def start_run(window_id: int, req: StartRunRequest | None = None):
     try:
-        result = svc.start_run(window_id, note=req.note if req else None)
+        result = svc.start_run(
+            window_id,
+            segments=req.segments if req else None,
+            note=req.note if req else None,
+        )
         # Backward compatibility: flatten the response
         return {
             "run": result["run"],

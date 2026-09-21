@@ -86,12 +86,12 @@ def _base_snapshot(data_dir):
     _write_csv(data_dir, "Deposit_events_20260919.csv", ["userId", "timestamp"], [])
 
 
-def _new_window(segments=(NEVER_DEPOSITED,), **kw):
-    return svc.create_window(name="test", segments=list(segments), **kw)
+def _new_window(**kw):
+    return svc.create_window(name="test", **kw)
 
 
-def _start_run(data_dir, window_id) -> int:
-    started = svc.start_run(window_id)
+def _start_run(data_dir, window_id, segments=(NEVER_DEPOSITED,)) -> int:
+    started = svc.start_run(window_id, segments=list(segments))
     return started["run"]["id"]
 
 
@@ -219,11 +219,13 @@ class TestEvaluateRun:
         assert report["audience"]["added"] == 1
         assert _member_ids(win["id"]) == ["6"]
 
-    def test_segment_must_be_selected_on_window(self, _init_db, _fixed_bands):
+    def test_segment_must_be_selected_on_run(self, _init_db, _fixed_bands):
         data_dir = settings.DATA_FOLDER
         _base_snapshot(data_dir)
-        win = _new_window(segments=(MID_TIER,))  # candidates are never-deposited
-        run_id = _start_run(data_dir, win["id"])
+        # The Run's segment scope is MID_TIER, so the never-deposited candidates
+        # never pass the segment gate.
+        win = _new_window()
+        run_id = _start_run(data_dir, win["id"], segments=(MID_TIER,))
 
         report = eligibility.evaluate_run(run_id, now=NOW)
 
@@ -349,8 +351,8 @@ class TestEvaluateRun:
             ["userId", "firstName", "email", "phone", "timestamp"],
             [("4", "Dan", "d@x.com", "08045678901", "2026-09-15 09:00:00")],
         )
-        win = _new_window(segments=(eligibility.UNSEGMENTED,))
-        run_id = _start_run(data_dir, win["id"])
+        win = _new_window()
+        run_id = _start_run(data_dir, win["id"], segments=(eligibility.UNSEGMENTED,))
 
         report = eligibility.evaluate_run(run_id, now=NOW)
 

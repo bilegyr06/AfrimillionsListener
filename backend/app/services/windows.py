@@ -6,10 +6,12 @@ Implements the business rules for the Campaign Window model:
   * Calendar defaults: Monday 00:00 -> Saturday 23:59:59 Africa/Lagos; the
     finalization deadline defaults to Sunday 14:00 and may be configured no
     later than Sunday 17:00 (Africa/Lagos).
-  * Segments are opaque identifiers selected on the Window (default:
-    ['unsegmented']). The authoritative segment SQL is supplied separately and
-    is deliberately NOT hard-coded here. Eligibility per segment produces the
-    eligible audience; the window sums those per-segment counts into N.
+  * Segments are opaque identifiers selected per Campaign Run when the Run
+    starts (a Run requires at least one segment and the selection is immutable
+    once started). The authoritative segment SQL is supplied separately and is
+    deliberately NOT hard-coded here. Eligibility per segment produces the
+    eligible audience for that Run; the window sums the audience's per-segment
+    counts into N.
   * Control calculation: C = 15,500 / N + 1,550; if C >= 0.5*N use 50%,
     otherwise Control% = C / N * 100, bucketed (<10% -> 10, <15% -> 15,
     <20% -> 20, else the calculated value). The operator may provide an
@@ -39,8 +41,6 @@ from app.db import windows as db
 from app.db.windows import WindowConfigError, WindowStateError
 from app.services import eligibility
 
-UNSEGMENTED = "unsegmented"
-
 VALID_ASSIGNMENT_METHODS = ("deterministic", "random")
 VALID_STATUSES = ("active", "ended", "finalized")
 VALID_RUN_STATUSES = ("running", "completed", "stopped")
@@ -48,7 +48,7 @@ VALID_RUN_STATUSES = ("running", "completed", "stopped")
 
 # ---------------------------------------------------------------------------
 # Control calculation
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 
 def suggest_control_percentage(eligible_count: int) -> float:
     """Effective control percentage for N eligible users (formula + buckets).
@@ -116,7 +116,6 @@ def create_window(
     start_time: datetime | None = None,
     end_time: datetime | None = None,
     finalization_deadline: datetime | None = None,
-    segments: list[str] | None = None,
     assignment_method: str = "deterministic",
     control_override: float | None = None,
     now: datetime | None = None,
@@ -126,6 +125,9 @@ def create_window(
     Defaults (Africa/Lagos): start Monday 00:00, end Saturday 23:59:59,
     finalization deadline Sunday 14:00. The deadline may be configured no later
     than Sunday 17:00 for the corresponding window.
+
+    The Window carries no segment scope; each Campaign Run selects its own
+    segment(s) when it starts.
 
     Only one Campaign Window runs at a time: creating a window while another
     window is 'active' is rejected (the persistence layer enforces the same
@@ -154,19 +156,6 @@ def create_window(
             f"(17:00) Africa/Lagos for this window (got {deadline.isoformat()})."
         )
 
-    if segments is None:
-        segment_list = [UNSEGMENTED]
-    else:
-        segment_list = list(segments)
-        if not segment_list:
-            raise WindowConfigError(
-                "At least one segment must be selected (omit segments to use "
-                "the default 'unsegmented' audience)."
-            )
-    if any(not isinstance(s, str) or not s for s in segment_list):
-        raise WindowConfigError("At least one non-empty segment must be selected.")
-    if len(set(segment_list)) != len(segment_list):
-        raise WindowConfigError("Selected segments must be unique (segments are mutually exclusive).")
     if assignment_method not in VALID_ASSIGNMENT_METHODS:
         raise WindowConfigError(
             f"assignment_method must be one of {VALID_ASSIGNMENT_METHODS}; got {assignment_method!r}."
@@ -190,7 +179,6 @@ def create_window(
             "end_time": dates.to_utc_iso(end),
             "finalization_deadline": dates.to_utc_iso(deadline),
             "business_timezone": dates.BUSINESS_TIMEZONE,
-            "selected_segments": segment_list,
             "assignment_method": assignment_method,
             "control_override": control_override,
             "created_at": now_iso,
@@ -544,17 +532,51 @@ def capture_source_snapshot(window_id: int, now: datetime | None = None) -> list
     return entries or []
 
 
-def start_run(window_id: int, note: str | None = None, *, now: datetime | None = None) -> dict:
+def _validate_run_segments(segments: list[str] | None) -> list[str]:
+    """Validate and normalize a Run's segment scope.
+
+    A Run must select at least one non-empty, unique segment when it starts;
+    there is no implicit default scope (the 'unsegmented' population is
+    selected explicitly like any other segment). The selection is immutable
+    once the Run has started.
+    """
+    if not segments:
+        raise WindowConfigError(
+            "At least one segment must be selected when starting a Run "
+            "(a Run has no implicit segment scope)."
+        )
+    segment_list = list(segments)
+    if any(not isinstance(s, str) or not s for s in segment_list):
+        raise WindowConfigError("Each selected segment must be a non-empty identifier.")
+    if len(set(segment_list)) != len(segment_list):
+        raise WindowConfigError("Selected segments must be unique (segments are mutually exclusive).")
+    return segment_list
+
+
+def start_run(
+    window_id: int,
+    *,
+    segments: list[str] | None,
+    note: str | None = None,
+    now: datetime | None = None,
+) -> dict:
     """Start a Campaign Run: snapshot source data, evaluate eligibility, freeze target.
+
+    The Run's segment scope (`segments`, required) is persisted at start and is
+    immutable from that moment on: eligibility evaluates candidates only against
+    this Run's selected segments, never the window's (the Window has no segment
+    scope).
 
     This is an atomic operation: the Run is created, its source snapshot captured,
     eligibility evaluated against that snapshot, and the complete target audience
     admitted with run_id set. The Run target is immutable after this point.
     """
+    selected_segments = _validate_run_segments(segments)
     started_at = dates.as_business(now) if now is not None else dates.now_business()
     files = capture_source_snapshot(window_id, started_at)
     snapshot, run = db.create_run_with_snapshot(
         window_id,
+        selected_segments=selected_segments,
         run_created_at=dates.to_utc_iso(started_at),
         started_at=dates.to_utc_iso(started_at),
         note=note,
@@ -666,11 +688,22 @@ def add_eligible_users(window_id: int, members: list[dict]) -> dict:
         segment_id = m.get("segment_id")
         if not segment_id:
             raise WindowConfigError(f"Member {user_id!r} needs a segment_id.")
-        if segment_id not in window["selected_segments"]:
-            raise WindowConfigError(
-                f"Member segment {segment_id!r} is not among the window's selected segments: "
-                f"{window['selected_segments']}."
-            )
+        # Segment scope is Run-level: a member admitted by a Run's evaluation
+        # must belong to that Run's selected segments. Members without a run_id
+        # (operator-entered audience) carry no segment scope reference and are
+        # not scope-checked here.
+        if m.get("run_id") is not None:
+            member_run = db.get_run(m["run_id"])
+            if member_run is None:
+                raise WindowConfigError(
+                    f"Member {user_id!r} references Campaign Run #{m['run_id']}, "
+                    "which does not exist."
+                )
+            if segment_id not in member_run["selected_segments"]:
+                raise WindowConfigError(
+                    f"Member {user_id!r} segment {segment_id!r} is not among Campaign Run "
+                    f"#{m['run_id']}'s selected segments: {member_run['selected_segments']}."
+                )
         if method == "deterministic":
             is_campaign = deterministic_is_campaign(user_id, campaign_pct)
             config = {
@@ -737,9 +770,7 @@ def refresh_eligible_counts(window_id: int) -> dict | None:
     total = sum(counts.values())
     if total == 0:
         return None
-    segment_counts = {
-        s: counts.get(s, 0) for s in window["selected_segments"]
-    }
+    segment_counts = dict(counts)
     return set_eligible_count(window_id, total, segment_counts)
 
 

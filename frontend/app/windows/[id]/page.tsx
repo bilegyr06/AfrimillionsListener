@@ -58,7 +58,7 @@ type Flash = { kind: "success" | "error"; text: string };
 // Configuration + split
 // ---------------------------------------------------------------------------
 
-function ConfigSection({ window, catalog }: { window: WindowDetail; catalog?: SegmentsResponse["items"] }) {
+function ConfigSection({ window }: { window: WindowDetail }) {
   return (
     <StatSection title="Window">
       <div className="section-body">
@@ -89,10 +89,6 @@ function ConfigSection({ window, catalog }: { window: WindowDetail; catalog?: Se
               <td>{window.business_timezone}</td>
             </tr>
             <tr>
-              <th>Segments</th>
-              <td>{window.selected_segments.map((id) => segmentLabel(id, catalog)).join(", ")}</td>
-            </tr>
-            <tr>
               <th>Assignment mode</th>
               <td>{assignmentMethodLabel(window.assignment_method)}</td>
             </tr>
@@ -121,14 +117,17 @@ function ConfigSection({ window, catalog }: { window: WindowDetail; catalog?: Se
 
 function RunsSection({
   window,
+  catalog,
   onChanged,
   flash,
 }: {
   window: WindowDetail;
+  catalog?: SegmentsResponse["items"];
   onChanged: () => void;
   flash: (f: Flash) => void;
 }) {
   const [note, setNote] = useState("");
+  const [selected, setSelected] = useState<string[]>(["unsegmented"]);
   const [starting, setStarting] = useState(false);
   const [busyRun, setBusyRun] = useState<number | null>(null);
   const [result, setResult] = useState<{
@@ -146,10 +145,21 @@ function RunsSection({
   };
 }
 
+  function toggleSegment(id: string) {
+    setSelected((current) =>
+      current.includes(id) ? current.filter((s) => s !== id) : [...current, id],
+    );
+  }
+
   async function startRun() {
+    if (selected.length === 0) {
+      flash({ kind: "error", text: "Select at least one segment for this run." });
+      return;
+    }
     setStarting(true);
     try {
       const res = await apiPost<StartRunResponse>(`/windows/${window.id}/runs`, {
+        segments: selected,
         note: note.trim() === "" ? null : note.trim(),
       });
       // The run now includes evaluation results from the atomic start
@@ -212,6 +222,25 @@ function RunsSection({
               {starting ? "Starting..." : "Start run"}
             </button>
           </div>
+          <div className="segment-picker">
+            <span className="segment-picker-label">Segment scope</span>
+            {(catalog ?? []).map((segment) => (
+              <label key={segment.id} className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(segment.id)}
+                  onChange={() => toggleSegment(segment.id)}
+                />
+                <span>
+                  {segment.label}
+                  {segment.default ? <span className="muted"> default</span> : null}
+                </span>
+              </label>
+            ))}
+            <span className="muted" style={{ fontSize: 12.5 }}>
+              This run&apos;s eligibility is limited to its selected segments.
+            </span>
+          </div>
         </div>
       )}
 
@@ -232,6 +261,7 @@ function RunsSection({
               <th>Started</th>
               <th>Ended</th>
               <th>Note</th>
+              <th>Segments</th>
               <th>Frozen snapshot</th>
               <th>Actions</th>
             </tr>
@@ -249,6 +279,9 @@ function RunsSection({
                   <td className="small muted">{formatDateTime(run.started_at)}</td>
                   <td className="small muted">{formatDateTime(run.ended_at)}</td>
                   <td className="small muted">{run.note ?? "\u2014"}</td>
+                  <td className="small">
+                    {run.selected_segments.map((id) => segmentLabel(id, catalog)).join(", ")}
+                  </td>
                   <td className="small">
                     <SnapshotCell capturedAt={run.snapshot.captured_at} files={run.snapshot.files} />
                   </td>
@@ -286,7 +319,7 @@ function RunsSection({
             })}
             {window.runs.length === 0 ? (
               <tr>
-                <td colSpan={7} className="small muted">
+                <td colSpan={8} className="small muted">
                   No runs started for this window yet.
                 </td>
               </tr>
@@ -592,7 +625,7 @@ function ReportSection({ report }: { report: WindowReport }) {
 // Tab components
 // ---------------------------------------------------------------------------
 
-function OverviewTab({ window, now }: { window: WindowDetail; now: Date }) {
+function OverviewTab({ window, catalog, now }: { window: WindowDetail; catalog?: SegmentsResponse["items"]; now: Date }) {
   const split = window.split.actual;
   const splitText =
     split.total_users > 0
@@ -632,10 +665,6 @@ function OverviewTab({ window, now }: { window: WindowDetail; now: Date }) {
                 <td>{window.business_timezone}</td>
               </tr>
               <tr>
-                <th>Segments</th>
-                <td>{window.selected_segments.map((id) => segmentLabel(id, [])).join(", ")}</td>
-              </tr>
-              <tr>
                 <th>Assignment</th>
                 <td>{assignmentMethodLabel(window.assignment_method)}</td>
               </tr>
@@ -670,6 +699,7 @@ function OverviewTab({ window, now }: { window: WindowDetail; now: Date }) {
                 <th>Started</th>
                 <th>Ended</th>
                 <th>Note</th>
+                <th>Segments</th>
                 <th>Frozen snapshot</th>
                 <th>Actions</th>
               </tr>
@@ -687,6 +717,9 @@ function OverviewTab({ window, now }: { window: WindowDetail; now: Date }) {
                     <td className="small muted">{formatDateTime(run.ended_at)}</td>
                     <td className="small muted">{run.note ?? "\u2014"}</td>
                     <td className="small">
+                      {run.selected_segments.map((id) => segmentLabel(id, catalog)).join(", ")}
+                    </td>
+                    <td className="small">
                       <SnapshotCell capturedAt={run.snapshot.captured_at} files={run.snapshot.files} />
                     </td>
                     <td className="small">
@@ -701,7 +734,7 @@ function OverviewTab({ window, now }: { window: WindowDetail; now: Date }) {
               })}
               {window.runs.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="small muted">
+                  <td colSpan={8} className="small muted">
                     No runs started for this window yet.
                   </td>
                 </tr>
@@ -785,7 +818,7 @@ function ReportTab({ report }: { report: WindowReport }) {
 function ConfigurationTab({ window, onChanged, flash }: { window: WindowDetail; onChanged: () => void; flash: (f: Flash) => void }) {
   return (
     <div>
-      <ConfigSection window={window} catalog={[]} />
+      <ConfigSection window={window} />
       <SplitSection split={window.split} />
       <ControlConfiguration window={window} onChanged={onChanged} flash={flash} />
     </div>
@@ -922,11 +955,11 @@ export default function WindowWorkspacePage() {
       <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
 
       <TabPanel id="overview" active={activeTab === "overview"}>
-        <OverviewTab window={window} now={now} />
+        <OverviewTab window={window} catalog={catalog} now={now} />
       </TabPanel>
 
       <TabPanel id="runs" active={activeTab === "runs"}>
-        <RunsSection window={window} onChanged={reloadAll} flash={setFlash} />
+        <RunsSection window={window} catalog={catalog} onChanged={reloadAll} flash={setFlash} />
       </TabPanel>
 
       <TabPanel id="audience" active={activeTab === "audience"}>

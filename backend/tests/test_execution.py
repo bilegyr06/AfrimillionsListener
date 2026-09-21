@@ -79,14 +79,14 @@ def _add_members(win_id, run_id, user_ids) -> None:
 
 
 def _setup(_init_db, _fast_cycle):
-    win = svc.create_window(name="test", segments=[NEVER_DEPOSITED])
+    win = svc.create_window(name="test")
     svc.set_control_override(win["id"], 50.0)
     svc.set_eligible_count(
         win["id"],
         len(CAMPAIGN_IDS) + len(CONTROL_IDS),
         {NEVER_DEPOSITED: len(CAMPAIGN_IDS) + len(CONTROL_IDS)},
     )
-    run_id = svc.start_run(win["id"])["run"]["id"]
+    run_id = svc.start_run(win["id"], segments=[NEVER_DEPOSITED])["run"]["id"]
     _add_members(win["id"], run_id, CAMPAIGN_IDS + CONTROL_IDS)
     return win, run_id
 
@@ -311,10 +311,10 @@ class TestDispatchLifecycle:
             await exc.dispatch_run(run_id, now=NOW, gateway=InMemorySmsGateway())
 
     async def test_empty_target_dispatches_zero(self, _init_db, _fast_cycle):
-        win = svc.create_window(name="test", segments=[NEVER_DEPOSITED])
+        win = svc.create_window(name="test")
         svc.set_control_override(win["id"], 50.0)
         svc.set_eligible_count(win["id"], 1, {NEVER_DEPOSITED: 1})
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=[NEVER_DEPOSITED])["run"]["id"]
 
         report = await exc.dispatch_run(run_id, now=NOW, gateway=InMemorySmsGateway())
 
@@ -361,8 +361,8 @@ class TestEvaluationIntegration:
     async def test_evaluation_seeds_target_and_dispatch_renders_names(self, _init_db, _fast_cycle, monkeypatch):
         monkeypatch.setattr(settings, "WELCOME_LOGIN_AGE_HOURS", 3)
         self._snapshot(settings.DATA_FOLDER)
-        win = svc.create_window(name="test", segments=[NEVER_DEPOSITED])
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        win = svc.create_window(name="test")
+        run_id = svc.start_run(win["id"], segments=[NEVER_DEPOSITED])["run"]["id"]
 
         report = eligibility.evaluate_run(run_id, now=NOW)
         # users 1, 3, 6 are eligible; with auto-configured 50% control all three

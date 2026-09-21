@@ -11,11 +11,10 @@ import {
   formatPercentage,
   formatRelativeTime,
   reportStatePresentation,
-  segmentLabel,
   windowDisplayName,
   windowStatusPresentation,
 } from "@/lib/format";
-import type { CampaignWindowRow, SegmentsResponse } from "@/lib/types";
+import type { CampaignWindowRow } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
 
 // A split is always shown as both sides: "Campaign 80% / Control 20%". The
@@ -47,9 +46,6 @@ export default function WindowsPage() {
   }, []);
 
   const windows = useQuery<CampaignWindowRow[]>(() => apiGet("/windows"), [], 30000);
-  const segments = useQuery<SegmentsResponse>(() => apiGet("/segments"), []);
-
-  const catalog = segments.data?.items;
 
   return (
     <div className="page">
@@ -89,7 +85,6 @@ export default function WindowsPage() {
                 <th>Status</th>
                 <th>Report</th>
                 <th>Period</th>
-                <th>Segments</th>
                 <th>Campaign / Control</th>
                 <th>Runs</th>
                 <th>Finalization</th>
@@ -121,9 +116,6 @@ export default function WindowsPage() {
                       {formatDate(w.start_time)}
                       {"\u2009\u2192\u2009"}
                       {formatDate(w.end_time)}
-                    </td>
-                    <td className="small">
-                      {w.selected_segments.map((id) => segmentLabel(id, catalog)).join(", ")}
                     </td>
                     <td>
                       <SplitCell row={w} />

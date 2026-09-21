@@ -525,6 +525,7 @@ export interface WindowRunRow {
   note: string | null;
   snapshot_id: number | null;
   created_at: string;
+  selected_segments: string[];
   snapshot: {
     captured_at: string | null;
     files: SnapshotFile[];

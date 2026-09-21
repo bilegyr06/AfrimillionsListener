@@ -98,7 +98,6 @@ def _new_window(
     start=None,
     end=None,
     deadline=None,
-    segments=None,
     assignment_method="deterministic",
     control_override=None,
 ):
@@ -107,10 +106,14 @@ def _new_window(
         start_time=start,
         end_time=end,
         finalization_deadline=deadline,
-        segments=segments,
         assignment_method=assignment_method,
         control_override=control_override,
     )
+
+
+def _start_run(window_id, segments=("unsegmented",), **kw):
+    """Start a Run with an explicit segment scope (Run-level)."""
+    return svc.start_run(window_id, segments=list(segments), **kw)
 
 
 def _member(user_id, segment="unsegmented", phone="08012345678", **extra):
@@ -132,7 +135,7 @@ class TestWindowCreation:
         w = _new_window(start=_dt(2026, 9, 14))
         assert w["status"] == "active"
         assert w["business_timezone"] == "Africa/Lagos"
-        assert w["selected_segments"] == ["unsegmented"]
+        assert w["selected_segments"] == []
         assert w["assignment_method"] == "deterministic"
         assert w["ended_at"] is None
         assert w["finalized_at"] is None
@@ -157,13 +160,11 @@ class TestWindowCreation:
         with pytest.raises(WindowConfigError):
             _new_window(start=_dt(2026, 9, 14), end=_dt(2026, 9, 14, 0, 0, 0))
 
-    def test_segments_default_and_validation(self, _init_db):
-        w = _new_window(segments=["SuperActive", "Affinity"], start=_dt(2026, 9, 14))
-        assert w["selected_segments"] == ["SuperActive", "Affinity"]
-        with pytest.raises(WindowConfigError):
-            _new_window(segments=["a", "a"], start=_dt(2026, 9, 14))
-        with pytest.raises(WindowConfigError):
-            _new_window(segments=[], start=_dt(2026, 9, 14))
+    def test_window_carries_no_segment_scope(self, _init_db):
+        w = _new_window(start=_dt(2026, 9, 14))
+        # Segment selection moved to Campaign Runs: a Window never selects
+        # segments, so its persisted selection is always empty.
+        assert w["selected_segments"] == []
 
     def test_invalid_assignment_method_rejected(self, _init_db):
         with pytest.raises(WindowConfigError):
@@ -277,7 +278,7 @@ class TestWindowEndExtension:
 class TestRuns:
     def test_normal_run_creation(self, _init_db):
         w = _new_window(start=_dt(2026, 9, 14))
-        result = svc.start_run(w["id"], note="first")
+        result = _start_run(w["id"], note="first")
         run = result["run"]
         assert run["status"] == "running"
         assert run["window_id"] == w["id"]
@@ -287,8 +288,8 @@ class TestRuns:
 
     def test_multiple_runs_in_one_window(self, _init_db):
         w = _new_window(start=_dt(2026, 9, 14))
-        first = svc.start_run(w["id"])["run"]
-        second = svc.start_run(w["id"])["run"]
+        first = _start_run(w["id"])["run"]
+        second = _start_run(w["id"])["run"]
         runs = svc.list_runs(w["id"])
         assert [r["id"] for r in runs] == [first["id"], second["id"]]
         assert all(r["status"] == "running" for r in runs)
@@ -297,7 +298,7 @@ class TestRuns:
         w = _new_window(start=_dt(2026, 9, 14))
         svc.end_window(w["id"])
         with pytest.raises(WindowStateError):
-            svc.start_run(w["id"])
+            _start_run(w["id"])
         assert db.get_window(w["id"])["status"] == "ended"
 
     def test_run_after_finalization_blocked(self, _init_db):
@@ -305,11 +306,11 @@ class TestRuns:
         svc.end_window(w["id"])
         svc.finalize_window(w["id"], now=FINALIZE_AT)
         with pytest.raises(WindowStateError):
-            svc.start_run(w["id"])
+            _start_run(w["id"])
 
     def test_active_run_closes_when_window_ends(self, _init_db):
         w = _new_window(start=_dt(2026, 9, 14))
-        run = svc.start_run(w["id"])["run"]
+        run = _start_run(w["id"])["run"]
         ended = svc.end_window(w["id"])
         assert ended["status"] == "ended"
         closed = ended["closed_runs"]
@@ -319,7 +320,7 @@ class TestRuns:
 
     def test_operator_stop_run(self, _init_db):
         w = _new_window(start=_dt(2026, 9, 14))
-        run = svc.start_run(w["id"])["run"]
+        run = _start_run(w["id"])["run"]
         stopped = svc.stop_run(run["id"], stop_reason="operator")
         assert stopped["status"] == "stopped"
         assert stopped["stop_reason"] == "operator"
@@ -327,7 +328,7 @@ class TestRuns:
 
     def test_auto_complete_run(self, _init_db):
         w = _new_window(start=_dt(2026, 9, 14))
-        run = svc.start_run(w["id"])["run"]
+        run = _start_run(w["id"])["run"]
         completed = svc.complete_run(run["id"])
         assert completed["status"] == "completed"
 
@@ -336,7 +337,7 @@ class TestRuns:
         svc.end_window(w["id"])
         svc.finalize_window(w["id"], now=FINALIZE_AT)
         with pytest.raises(WindowStateError):
-            svc.start_run(w["id"])
+            _start_run(w["id"])
 
 
 class TestRunSnapshots:
@@ -349,7 +350,7 @@ class TestRunSnapshots:
         data_dir = settings.DATA_FOLDER
         self._write(data_dir, "Login_a.csv", "userId,timestamp", [["1", "2026-09-14 09:00:00"]])
         w = _new_window(start=_dt(2026, 9, 14))
-        result = svc.start_run(w["id"])
+        result = _start_run(w["id"])
         files = result["snapshot"]["files"]
         assert [f["filename"] for f in files] == ["Login_a.csv"]
         assert files[0]["dataset"] == "Login"
@@ -361,7 +362,7 @@ class TestRunSnapshots:
         data_dir = settings.DATA_FOLDER
         self._write(data_dir, "Login_a.csv", "userId,timestamp", [["1", "2026-09-14 09:00:00"]])
         w = _new_window(start=_dt(2026, 9, 14))
-        run = svc.start_run(w["id"])["run"]
+        run = _start_run(w["id"])["run"]
         before = svc.get_run_snapshot(run["id"])["files"]
 
         # Simulate a later upload landing in the data folder AFTER the run start.
@@ -423,7 +424,7 @@ class TestLifecycleTransitions:
             lambda: svc.set_eligible_count(w["id"], 20),
             lambda: svc.set_control_override(w["id"], 5),
             lambda: svc.extend_window_end(w["id"], _dt(2026, 9, 18, 12)),
-            lambda: svc.start_run(w["id"]),
+            lambda: _start_run(w["id"]),
         ):
             with pytest.raises(WindowStateError):
                 fn()
@@ -570,20 +571,28 @@ class TestAudienceAssignment:
         w = _new_window(start=_dt(2026, 9, 14), control_override=10)
         svc.set_eligible_count(w["id"], 20000)
         svc.add_eligible_users(w["id"], [_member("7"), _member("97")])
-        svc.start_run(w["id"])
-        svc.start_run(w["id"])
+        _start_run(w["id"])
+        _start_run(w["id"])
         assert svc.get_audience_member(w["id"], "7")["assignment"] == "campaign"
         assert svc.get_audience_member(w["id"], "97")["assignment"] == "control"
         assert svc.count_audience(w["id"])["total"] == 2
 
     def test_segment_id_recorded_and_must_be_selected(self, _init_db):
-        w = _new_window(start=_dt(2026, 9, 14), segments=["SuperActive", "Affinity"], control_override=10)
+        w = _new_window(start=_dt(2026, 9, 14), control_override=10)
         svc.set_eligible_count(w["id"], 20000, {"SuperActive": 10000, "Affinity": 10000})
-        svc.add_eligible_users(w["id"], [_member("1", segment="SuperActive"), _member("2", segment="Affinity")])
+        run = _start_run(w["id"], segments=["SuperActive", "Affinity"])["run"]
+        assert run["selected_segments"] == ["SuperActive", "Affinity"]
+        svc.add_eligible_users(
+            w["id"],
+            [
+                _member("1", segment="SuperActive", run_id=run["id"]),
+                _member("2", segment="Affinity", run_id=run["id"]),
+            ],
+        )
         assert svc.get_audience_member(w["id"], "1")["segment_id"] == "SuperActive"
         assert svc.get_audience_member(w["id"], "2")["segment_id"] == "Affinity"
         with pytest.raises(WindowConfigError):
-            svc.add_eligible_users(w["id"], [_member("3", segment="Unsegmented")])
+            svc.add_eligible_users(w["id"], [_member("3", segment="Unsegmented", run_id=run["id"])])
 
     def test_invalid_phone_excluded_from_audience(self, _init_db):
         w = _new_window(start=_dt(2026, 9, 14), control_override=10)
@@ -655,7 +664,7 @@ class TestControlCalculation:
         assert svc.suggest_control_percentage(5000) == pytest.approx(31.062, abs=1e-3)
 
     def test_multi_segment_eligible_audience_sums_to_n(self, _init_db):
-        w = _new_window(start=_dt(2026, 9, 14), segments=["A", "B"], control_override=12)
+        w = _new_window(start=_dt(2026, 9, 14), control_override=12)
         svc.set_eligible_count(w["id"], 250, {"A": 100, "B": 150})
         w2 = db.get_window(w["id"])
         assert w2["eligible_count"] == 250
@@ -666,7 +675,7 @@ class TestControlCalculation:
         assert w2["control_percentage"] == 12.0
 
     def test_segment_counts_must_sum_to_n(self, _init_db):
-        w = _new_window(start=_dt(2026, 9, 14), segments=["A", "B"])
+        w = _new_window(start=_dt(2026, 9, 14))
         with pytest.raises(WindowConfigError):
             svc.set_eligible_count(w["id"], 250, {"A": 100, "B": 100})
 
@@ -697,7 +706,7 @@ class TestControlCalculation:
     def test_first_run_locks_control_percentage(self, _init_db):
         w = _new_window(start=_dt(2026, 9, 14), control_override=15)
         svc.set_eligible_count(w["id"], 20000)
-        svc.start_run(w["id"])
+        _start_run(w["id"])
         assert db.get_window(w["id"])["control_locked"] is True
         with pytest.raises(WindowStateError) as exc:
             svc.set_control_override(w["id"], 20)
@@ -710,7 +719,7 @@ class TestControlCalculation:
         # No N and no source data: the Run admits zero eligible users, yet the
         # configuration must still lock at Run start.
         w = _new_window(start=_dt(2026, 9, 14), control_override=15)
-        svc.start_run(w["id"])
+        _start_run(w["id"])
         win = db.get_window(w["id"])
         assert win["control_locked"] is True
         assert win["eligible_count"] is None
@@ -721,7 +730,7 @@ class TestControlCalculation:
         w = _new_window(start=_dt(2026, 9, 14))
         svc.set_eligible_count(w["id"], 20000)
         assert db.get_window(w["id"])["control_percentage"] == 10.0  # formula (bucket)
-        svc.start_run(w["id"])
+        _start_run(w["id"])
         with pytest.raises(WindowStateError) as exc:
             svc.set_control_override(w["id"], 15)
         assert "first run" in str(exc.value).lower()
@@ -753,7 +762,7 @@ class TestControlCalculation:
         w = _new_window(start=_dt(2026, 9, 14))
         svc.set_eligible_count(w["id"], 20000)
         assert db.get_window(w["id"])["control_percentage"] == 10.0
-        svc.start_run(w["id"])  # the first Run locks the configuration
+        _start_run(w["id"])  # the first Run locks the configuration
         # N=10000 on its own would suggest 20%; the locked 10% must not move.
         grown = svc.set_eligible_count(w["id"], 10000)
         assert grown["eligible_count"] == 10000
@@ -783,8 +792,8 @@ class TestControlCalculation:
         w = _new_window(start=_dt(2026, 9, 14), control_override=10)
         svc.set_eligible_count(w["id"], 20000)
         svc.add_eligible_users(w["id"], [_member("7"), _member("97")])
-        svc.start_run(w["id"])
-        svc.start_run(w["id"])  # a later Run in the same window
+        _start_run(w["id"])
+        _start_run(w["id"])  # a later Run in the same window
         win = db.get_window(w["id"])
         assert win["control_percentage"] == 10.0
         assert win["eligible_count"] == 2  # N refreshed, percentage unchanged
@@ -796,7 +805,7 @@ class TestControlCalculation:
         w = _new_window(start=_dt(2026, 9, 14), control_override=10)
         svc.set_eligible_count(w["id"], 20000)
         svc.add_eligible_users(w["id"], [_member("97")])  # control (97 % 100 >= 90)
-        svc.start_run(w["id"])  # the first Run locks the configuration
+        _start_run(w["id"])  # the first Run locks the configuration
         with pytest.raises(WindowStateError):
             svc.set_control_override(w["id"], 30)
         svc.add_eligible_users(w["id"], [_member("5"), _member("97")])  # later admission
@@ -847,7 +856,7 @@ class TestWindowAPI:
 
     def test_start_run_and_snapshot(self, client):
         w = client.post("/windows", json={"name": "W2"}).json()
-        run = client.post(f"/windows/{w['id']}/runs", json={"note": "go"}).json()
+        run = client.post(f"/windows/{w['id']}/runs", json={"segments": ["unsegmented"], "note": "go"}).json()
         assert run["run"]["status"] == "running"
         snap = client.get(f"/runs/{run['run']['id']}/snapshot").json()
         assert "files" in snap
@@ -872,7 +881,7 @@ class TestWindowAPI:
         allowed = client.post(f"/windows/{w['id']}/control-override", json={"percentage": 15})
         assert allowed.status_code == 200
         assert allowed.json()["control_percentage"] == 15.0
-        run = client.post(f"/windows/{w['id']}/runs", json={"note": "lock"})
+        run = client.post(f"/windows/{w['id']}/runs", json={"segments": ["unsegmented"], "note": "lock"})
         assert run.status_code == 200
         rejection = client.post(f"/windows/{w['id']}/control-override", json={"percentage": 20})
         assert rejection.status_code == 409
@@ -897,7 +906,7 @@ class TestWindowAPI:
             f"/windows/{w['id']}/audience",
             json=[{"user_id": "10", "segment_id": "unsegmented", "phone": "08012345678"}],
         )
-        client.post(f"/windows/{w['id']}/runs", json={"note": "alpha"})
+        client.post(f"/windows/{w['id']}/runs", json={"segments": ["unsegmented"], "note": "alpha"})
         rows = client.get("/windows").json()
         assert rows
         row = next(r for r in rows if r["id"] == w["id"])
@@ -914,7 +923,7 @@ class TestWindowAPI:
 
     def test_window_detail_snapshot_enrichment(self, client):
         w = client.post("/windows", json={"name": "W5"}).json()
-        run = client.post(f"/windows/{w['id']}/runs", json={"note": "go"}).json()["run"]
+        run = client.post(f"/windows/{w['id']}/runs", json={"segments": ["unsegmented"], "note": "go"}).json()["run"]
         detail = client.get(f"/windows/{w['id']}").json()
         assert detail["runs"][0]["id"] == run["id"]
         assert detail["runs"][0]["snapshot"]["captured_at"] is not None
@@ -922,7 +931,7 @@ class TestWindowAPI:
 
     def test_window_data_state(self, client):
         w = client.post("/windows", json={"name": "W6"}).json()
-        run = client.post(f"/windows/{w['id']}/runs", json={"note": "go"}).json()["run"]
+        run = client.post(f"/windows/{w['id']}/runs", json={"segments": ["unsegmented"], "note": "go"}).json()["run"]
         state = client.get(f"/windows/{w['id']}/data-state").json()
         assert state["window_id"] == w["id"]
         assert state["status"] == "active"
@@ -951,6 +960,7 @@ class TestRunRequiresWindow:
         with pytest.raises(WindowStateError):
             db.create_run_with_snapshot(
                 window_id=99999,  # non-existent window
+                selected_segments=["unsegmented"],
                 run_created_at=dates.to_utc_iso(_dt(2026, 9, 14, 10, 0, 0)),
                 started_at=dates.to_utc_iso(_dt(2026, 9, 14, 10, 0, 0)),
                 note=None,
@@ -963,7 +973,7 @@ class TestRunRequiresWindow:
         w = _new_window(start=_dt(2026, 9, 14))
         svc.end_window(w["id"])
         with pytest.raises(WindowStateError) as exc:
-            svc.start_run(w["id"])
+            _start_run(w["id"])
         assert "is 'ended'" in str(exc.value) or "active window" in str(exc.value)
 
     def test_run_cannot_be_started_in_finalized_window(self, _init_db):
@@ -972,13 +982,13 @@ class TestRunRequiresWindow:
         svc.end_window(w["id"])
         svc.finalize_window(w["id"], now=FINALIZE_AT)
         with pytest.raises(WindowStateError) as exc:
-            svc.start_run(w["id"])
+            _start_run(w["id"])
         assert "finalized" in str(exc.value) or "active window" in str(exc.value)
 
     def test_valid_active_window_can_create_run(self, _init_db):
         """An active window can successfully create/start a Run."""
         w = _new_window(start=_dt(2026, 9, 14))
-        result = svc.start_run(w["id"], note="test run")
+        result = _start_run(w["id"], note="test run")
         run = result["run"]
         assert run["status"] == "running"
         assert run["window_id"] == w["id"]
@@ -988,8 +998,8 @@ class TestRunRequiresWindow:
     def test_multiple_runs_in_same_window(self, _init_db):
         """A window can have multiple sequential runs."""
         w = _new_window(start=_dt(2026, 9, 14))
-        first = svc.start_run(w["id"])["run"]
-        second = svc.start_run(w["id"])["run"]
+        first = _start_run(w["id"])["run"]
+        second = _start_run(w["id"])["run"]
         runs = svc.list_runs(w["id"])
         assert len(runs) == 2
         assert [r["id"] for r in runs] == [first["id"], second["id"]]
@@ -1002,7 +1012,7 @@ class TestRunRequiresWindow:
             "userId,timestamp\n1,2026-09-14 09:00:00\n", encoding="utf-8"
         )
         w = _new_window(start=_dt(2026, 9, 14))
-        result = svc.start_run(w["id"])
+        result = _start_run(w["id"])
         files = result["snapshot"]["files"]
         assert len(files) == 1
         assert files[0]["filename"] == "Login_test.csv"
@@ -1058,14 +1068,14 @@ class TestWindowLifecycleRestrictionsRemainEnforced:
             lambda: svc.set_eligible_count(w["id"], 200),
             lambda: svc.set_control_override(w["id"], 20),
             lambda: svc.extend_window_end(w["id"], _dt(2026, 9, 18, 12, 0, 0)),
-            lambda: svc.start_run(w["id"]),
+            lambda: _start_run(w["id"]),
         ):
             with pytest.raises(WindowStateError):
                 fn()
 
     def test_active_run_stopped_when_window_ends(self, _init_db):
         w = _new_window(start=_dt(2026, 9, 14))
-        run = svc.start_run(w["id"])["run"]
+        run = _start_run(w["id"])["run"]
         ended = svc.end_window(w["id"])
         assert ended["status"] == "ended"
         closed_runs = ended["closed_runs"]
@@ -1099,8 +1109,8 @@ class TestRunLifecycleCorrected:
             "user_id": "3", "kind": "campaign", "phone": "08034567890",
             "status": "sent", "sent_at": dates.to_utc_iso(wdt(2026, 9, 19, 17, 0)),
         })
-        win = _new_window(segments=(NEVER_DEPOSITED,))
-        result = svc.start_run(win["id"], now=NOW)
+        win = _new_window()
+        result = _start_run(win["id"], segments=(NEVER_DEPOSITED,), now=NOW)
 
         # Run is created and evaluation is returned
         assert result["run"]["status"] == "running"
@@ -1123,7 +1133,7 @@ class TestRunLifecycleCorrected:
         data_dir = settings.DATA_FOLDER
         _base_snapshot(data_dir)
         win = _new_window()
-        run = svc.start_run(win["id"], now=NOW)["run"]
+        run = _start_run(win["id"], now=NOW)["run"]
 
         # Get initial target size
         initial_target = db.get_run_target(win["id"], run["id"])
@@ -1138,7 +1148,7 @@ class TestRunLifecycleCorrected:
         data_dir = settings.DATA_FOLDER
         _base_snapshot(data_dir)
         win = _new_window()
-        run = svc.start_run(win["id"], now=NOW)["run"]
+        run = _start_run(win["id"], now=NOW)["run"]
 
         # Get initial target (users 1 and 6 are eligible, 5 has invalid phone)
         initial_target = db.get_run_target(win["id"], run["id"])
@@ -1169,7 +1179,7 @@ class TestRunLifecycleCorrected:
         data_dir = settings.DATA_FOLDER
         _base_snapshot(data_dir)
         win = _new_window()
-        run = svc.start_run(win["id"], now=NOW)["run"]
+        run = _start_run(win["id"], now=NOW)["run"]
 
         # Get initial target
         initial_target = db.get_run_target(win["id"], run["id"])
@@ -1195,7 +1205,7 @@ class TestRunLifecycleCorrected:
         data_dir = settings.DATA_FOLDER
         _base_snapshot(data_dir)
         win = _new_window()
-        run = svc.start_run(win["id"], now=NOW)["run"]
+        run = _start_run(win["id"], now=NOW)["run"]
 
         # Get initial target
         initial_target = db.get_run_target(win["id"], run["id"])
@@ -1221,7 +1231,7 @@ class TestRunLifecycleCorrected:
         data_dir = settings.DATA_FOLDER
         _base_snapshot(data_dir)
         win = _new_window()
-        run = svc.start_run(win["id"], now=NOW)["run"]
+        run = _start_run(win["id"], now=NOW)["run"]
 
         # Get initial target
         initial_target = db.get_run_target(win["id"], run["id"])
@@ -1248,7 +1258,7 @@ class TestRunLifecycleCorrected:
         data_dir = settings.DATA_FOLDER
         _base_snapshot(data_dir)
         win = _new_window()
-        run = svc.start_run(win["id"], now=NOW)["run"]
+        run = _start_run(win["id"], now=NOW)["run"]
 
         # Run is active - check the flag
         assert any_window_has_active_run() is True
@@ -1281,7 +1291,7 @@ class TestRunLifecycleCorrected:
             [("1", "Alice", "a@x.com", "08012345678", "2026-09-10 10:00:00")],
         )
         win = _new_window()
-        run = svc.start_run(win["id"])["run"]
+        run = _start_run(win["id"])["run"]
 
         # Run is active
         assert any_window_has_active_run() is True
@@ -1311,7 +1321,7 @@ class TestRunLifecycleCorrected:
             ],
         )
         win = _new_window(control_override=50)  # 50% control
-        run = svc.start_run(win["id"])["run"]
+        run = _start_run(win["id"])["run"]
 
         # Get frozen target
         target = db.get_run_target(win["id"], run["id"])
@@ -1351,10 +1361,10 @@ class TestRunLifecycleCorrected:
             "user_id": "6", "kind": "campaign", "phone": "08067890123",
             "status": "failed", "sent_at": dates.to_utc_iso(wdt(2026, 9, 19, 17, 0)),
         })
-        win = _new_window(segments=(NEVER_DEPOSITED,))
+        win = _new_window()
 
         # Run 1
-        run1 = svc.start_run(win["id"], now=NOW)["run"]
+        run1 = _start_run(win["id"], segments=(NEVER_DEPOSITED,), now=NOW)["run"]
         target1 = db.get_run_target(win["id"], run1["id"])
         # Users 1 and 6 are eligible, 5 has invalid phone
         target1_ids = {m["user_id"] for m in target1}
@@ -1376,7 +1386,7 @@ class TestRunLifecycleCorrected:
 
         # Run 2 (after upload) - only gets NEW users (user 7)
         # Existing users 1 and 6 keep their original run_id (run1)
-        run2 = svc.start_run(win["id"], now=NOW)["run"]
+        run2 = _start_run(win["id"], segments=(NEVER_DEPOSITED,), now=NOW)["run"]
         target2 = db.get_run_target(win["id"], run2["id"])
         target2_ids = {m["user_id"] for m in target2}
         assert target2_ids == {"7"}  # Only new user added to Run 2
@@ -1403,7 +1413,7 @@ class TestRunLifecycleCorrected:
             "status": "failed", "sent_at": dates.to_utc_iso(wdt(2026, 9, 19, 17, 0)),
         })
         win = _new_window()
-        run = svc.start_run(win["id"], now=NOW)["run"]
+        run = _start_run(win["id"], now=NOW)["run"]
 
         # Get initial target
         target1 = db.get_run_target(win["id"], run["id"])

@@ -16,7 +16,6 @@ import {
   formatNumber,
   formatRelativeTime,
   reportStatePresentation,
-  segmentLabel,
   smsKindLabel,
   smsStatusPresentation,
   windowDisplayName,
@@ -26,7 +25,6 @@ import type {
   CampaignWindowRow,
   Paged,
   ReportOverview,
-  SegmentsResponse,
   SmsLogEntry,
 } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
@@ -44,12 +42,10 @@ function Stat({ label, value, accent, sub }: { label: string; value: string; acc
 
 function ActiveWindowSection({
   windows,
-  catalog,
   now,
   reload,
 }: {
   windows: { data: CampaignWindowRow[] | null; loading: boolean; error: string | null };
-  catalog?: SegmentsResponse["items"];
   now: Date;
   reload: () => void;
 }) {
@@ -135,19 +131,12 @@ function ActiveWindowSection({
                   <div className="sub">Finalization {formatRelativeTime(w.finalization_deadline, now)}</div>
                 </div>
                 <div className="stat">
-                  <div className="label">Segments</div>
-                  <div className="value" style={{ fontSize: 16 }}>
-                    {w.selected_segments.map((id) => segmentLabel(id, catalog)).join(", ")}
-                  </div>
-                  <div className="sub">{`${assignmentMethodLabel(w.assignment_method)} assignment`}</div>
-                </div>
-                <div className="stat">
                   <div className="label">Eligible (N)</div>
                   <div className="value" style={{ fontSize: 16 }}>
                     {formatNumber(w.eligible_count)}
                   </div>
                   <div className="sub">
-                    Campaign {formatNumber(split.campaign_users)}, Control {formatNumber(split.control_users)}
+                    {assignmentMethodLabel(w.assignment_method)} assignment
                   </div>
                 </div>
                 <div className="stat">
@@ -181,7 +170,6 @@ export default function DashboardPage() {
   const overview = useQuery<ReportOverview>(() => apiGet("/report/overview"), [], 30000);
   const recent = useQuery<Paged<SmsLogEntry>>(() => apiGet("/sms/logs", { page_size: 8 }), []);
   const windows = useQuery<CampaignWindowRow[]>(() => apiGet("/windows"), [], 30000);
-  const segments = useQuery<SegmentsResponse>(() => apiGet("/segments"), []);
 
   const [balanceAt, setBalanceAt] = useState<number | null>(null);
   const [nowTs, setNowTs] = useState(() => Date.now());
@@ -265,7 +253,6 @@ export default function DashboardPage() {
 
       <ActiveWindowSection
         windows={windows}
-        catalog={segments.data?.items}
         now={new Date(nowTs)}
         reload={windows.reload}
       />

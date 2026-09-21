@@ -263,6 +263,7 @@ def init_db():
             stop_reason TEXT,
             note TEXT,
             snapshot_id INTEGER,
+            selected_segments TEXT NOT NULL DEFAULT '[]',
             created_at TEXT NOT NULL,
             FOREIGN KEY (window_id) REFERENCES campaign_windows (id)
         )
@@ -305,11 +306,19 @@ def init_db():
         )
         """
     )
-    # Which Campaign Run admitted each audience member. This column identifies
+# Which Campaign Run admitted each audience member. This column identifies
     # a Run's FROZEN dispatch target: a user becomes a Run's target when that
     # Run's evaluation admits them, and no later Run re-admits them (existing
     # members are never rewritten), so run_id never changes once set.
     _ensure_column(conn, "window_audiences", "run_id", "INTEGER")
+
+    # Segment scope is a RUN-level configuration in v2: each Campaign Run
+    # selects its own segment(s) at start (immutable once running). Legacy
+    # databases backfill to '[]' and only Runs started from now on carry a
+    # real selection.
+    _ensure_column(
+        conn, "campaign_runs", "selected_segments", "TEXT NOT NULL DEFAULT '[]'"
+    )
 
     # Control percentage configuration lock. Set when the window's first
     # Campaign Run starts; from that moment the Control percentage is fixed for

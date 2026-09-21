@@ -145,7 +145,7 @@ def _group(report, kind="campaign"):
 class TestAudience:
     def test_campaignable_population_and_groups_are_separate(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS + CONTROL_IDS)
 
         report = window_report.build_report(win["id"])
@@ -155,7 +155,7 @@ class TestAudience:
 
     def test_invalid_phone_members_are_not_in_audience(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         svc.add_eligible_users(win["id"], [
             {"user_id": "1", "segment_id": "unsegmented", "phone": _phone("1"), "run_id": run_id},
             {"user_id": "9", "segment_id": "unsegmented", "phone": "not-a-phone", "run_id": run_id},
@@ -167,7 +167,7 @@ class TestAudience:
 
     def test_control_has_no_campaign_sms_metrics(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS + CONTROL_IDS)
         _welcome(run_id, "1", _dt(2026, 9, 14, 10), status="sent")
 
@@ -186,7 +186,7 @@ class TestAudience:
 class TestLogins:
     def test_logged_in_users_count_login_facts_in_period(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS + CONTROL_IDS)
         insert_login_records([
             _login("1", _dt(2026, 9, 14, 9)),
@@ -201,7 +201,7 @@ class TestLogins:
 
     def test_logins_outside_period_are_excluded(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS)
         insert_login_records([
             _login("1", _dt(2026, 9, 13, 23, 59)),  # Sunday before the window
@@ -212,7 +212,7 @@ class TestLogins:
 
     def test_login_rows_dedup_on_user_and_time(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, ("1",))
         rec = _login("1", _dt(2026, 9, 14, 9))
         # Same (user, logged_at) from another file -> the dedup key keeps one row.
@@ -276,7 +276,7 @@ class TestLogins:
 class TestPlays:
     def test_played_users_sales_and_rates(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS + CONTROL_IDS)
         insert_play_records([
             _play("1", _dt(2026, 9, 14, 10, 0), amount=100),
@@ -301,7 +301,7 @@ class TestPlays:
 
     def test_play_records_dedup_by_source_key(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, ("1",))
         rec = _play("1", _dt(2026, 9, 14, 10), amount=100)
         # Same source_key from a second file is ignored by the UNIQUE constraint.
@@ -315,7 +315,7 @@ class TestPlays:
 
     def test_active_days_multi_day_and_partition(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS)
         insert_play_records([
             _play("1", _dt(2026, 9, 14, 10)),   # day 1
@@ -336,7 +336,7 @@ class TestPlays:
 
     def test_game_distribution_sorts_by_plays(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS)
         insert_play_records([
             _play("1", _dt(2026, 9, 14, 10), game="Aviator", amount=10),
@@ -355,7 +355,7 @@ class TestPlays:
 
     def test_period_boundary_is_inclusive_relabelled_frame(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS)
         # Lagos Saturday 23:59:59 is the window end and IS inside the period;
         # Sunday 00:00:01 is not (a Sunday upload is grace past the window).
@@ -369,7 +369,7 @@ class TestPlays:
 
     def test_zero_denominator_rates_are_none_not_zero(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS)  # no players
         report = window_report.build_report(win["id"])
         camp = _group(report, "campaign")
@@ -388,7 +388,7 @@ class TestPlays:
 class TestDeposits:
     def test_deposit_rate_and_deposit_then_play(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS)
         insert_deposit_records([
             _deposit("1", _dt(2026, 9, 14, 9)),   # deposits before her play
@@ -409,7 +409,7 @@ class TestDeposits:
 
     def test_login_to_play_and_login_no_play(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS)
         insert_login_records([
             _login("1", _dt(2026, 9, 14, 9)),     # logged in and plays
@@ -429,7 +429,7 @@ class TestDeposits:
 
     def test_deposits_of_control_never_leak_into_campaign(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS + CONTROL_IDS)
         insert_deposit_records([_deposit("51", _dt(2026, 9, 14, 9))])
         report = window_report.build_report(win["id"])
@@ -444,7 +444,7 @@ class TestDeposits:
 class TestAttribution:
     def test_play_before_sms_is_not_a_conversion(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS)
         insert_play_records([_play("1", _dt(2026, 9, 14, 9), amount=50)])
         _welcome(run_id, "1", _dt(2026, 9, 14, 10))
@@ -464,7 +464,7 @@ class TestAttribution:
 
     def test_failed_sms_is_not_an_intervention(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS)
         _welcome(run_id, "1", _dt(2026, 9, 14, 9), status="failed")
         insert_play_records([_play("1", _dt(2026, 9, 14, 10))])
@@ -479,7 +479,7 @@ class TestAttribution:
 
     def test_first_play_after_sms_is_conversion_later_plays_are_activity(self, _init_db):
         win = _setup(_init_db)
-        run_id = svc.start_run(win["id"])["run"]["id"]
+        run_id = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run_id, CAMPAIGN_IDS)
         _welcome(run_id, "1", _dt(2026, 9, 14, 9))
         insert_play_records([
@@ -502,7 +502,7 @@ class TestAttribution:
 
     def test_most_recent_intervention_wins_and_run_2_beats_run_1(self, _init_db):
         win = _setup(_init_db)
-        run1 = svc.start_run(win["id"])["run"]["id"]
+        run1 = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run1, CAMPAIGN_IDS)
         _welcome(run1, "1", _dt(2026, 9, 15, 9))
         insert_play_records([
@@ -510,7 +510,7 @@ class TestAttribution:
             _play("1", _dt(2026, 9, 16, 11), amount=200),   # run1 activity
         ])
 
-        run2 = svc.start_run(win["id"])["run"]["id"]
+        run2 = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _welcome(run2, "1", _dt(2026, 9, 17, 9))
         insert_play_records([_play("1", _dt(2026, 9, 17, 10), amount=300)])
 
@@ -532,11 +532,11 @@ class TestAttribution:
 
     def test_converted_user_with_later_run_sms_still_distinct(self, _init_db):
         win = _setup(_init_db)
-        run1 = svc.start_run(win["id"])["run"]["id"]
+        run1 = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run1, CAMPAIGN_IDS)
         _welcome(run1, "1", _dt(2026, 9, 15, 9))
         insert_play_records([_play("1", _dt(2026, 9, 15, 10))])
-        run2 = svc.start_run(win["id"])["run"]["id"]
+        run2 = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _welcome(run2, "1", _dt(2026, 9, 16, 9))
         insert_play_records([_play("1", _dt(2026, 9, 16, 10))])
 
@@ -547,7 +547,7 @@ class TestAttribution:
 
     def test_unattributed_and_attributed_plays_are_partitioned(self, _init_db):
         win = _setup(_init_db)
-        run1 = svc.start_run(win["id"])["run"]["id"]
+        run1 = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run1, CAMPAIGN_IDS)
         _welcome(run1, "1", _dt(2026, 9, 14, 9))
         insert_play_records([
@@ -563,7 +563,7 @@ class TestAttribution:
 
     def test_run_summary_counts_target_and_activity(self, _init_db):
         win = _setup(_init_db)
-        run1 = svc.start_run(win["id"])["run"]["id"]
+        run1 = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run1, CAMPAIGN_IDS)
         _welcome(run1, "1", _dt(2026, 9, 14, 9))
         _welcome(run1, "2", _dt(2026, 9, 14, 9))
@@ -586,7 +586,7 @@ class TestAttribution:
 
     def test_control_never_attributed_even_with_stray_welcome(self, _init_db):
         win = _setup(_init_db)
-        run1 = svc.start_run(win["id"])["run"]["id"]
+        run1 = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run1, CAMPAIGN_IDS + CONTROL_IDS)
         # A control user is never a Run target and would never be sent to, but
         # even a stray ledger row cannot make Control convert.
@@ -606,7 +606,7 @@ class TestAttribution:
 class TestFinalization:
     def test_finalize_freezes_report_snapshot(self, _init_db):
         win = _setup(_init_db)
-        run1 = svc.start_run(win["id"])["run"]["id"]
+        run1 = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run1, CAMPAIGN_IDS)
         _welcome(run1, "1", _dt(2026, 9, 14, 9))
         insert_play_records([_play("1", _dt(2026, 9, 14, 10), amount=100)])
@@ -622,7 +622,7 @@ class TestFinalization:
 
     def test_finalized_report_immutable_when_facts_change_after(self, _init_db):
         win = _setup(_init_db)
-        run1 = svc.start_run(win["id"])["run"]["id"]
+        run1 = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run1, CAMPAIGN_IDS)
         _welcome(run1, "1", _dt(2026, 9, 14, 9))
         insert_play_records([_play("1", _dt(2026, 9, 14, 10), amount=100)])
@@ -643,14 +643,14 @@ class TestFinalization:
 
     def test_finalize_requires_ended_window(self, _init_db):
         win = _setup(_init_db)
-        run1 = svc.start_run(win["id"])["run"]["id"]
+        run1 = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run1, CAMPAIGN_IDS)
         with pytest.raises(Exception):
             svc.finalize_window(win["id"], now=FINALIZE_AT)  # still active
 
     def test_live_report_counts_grace_period_uploads(self, _init_db):
         win = _setup(_init_db)
-        run1 = svc.start_run(win["id"])["run"]["id"]
+        run1 = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run1, CAMPAIGN_IDS)
         _welcome(run1, "1", _dt(2026, 9, 14, 9))
         insert_play_records([_play("1", _dt(2026, 9, 14, 10), amount=100)])
@@ -668,7 +668,7 @@ class TestFinalization:
 
     def test_report_skips_out_of_period_uploads_even_in_grace(self, _init_db):
         win = _setup(_init_db)
-        run1 = svc.start_run(win["id"])["run"]["id"]
+        run1 = svc.start_run(win["id"], segments=["unsegmented"])["run"]["id"]
         _add_members(win["id"], run1, CAMPAIGN_IDS)
         insert_play_records([_play("1", _dt(2026, 9, 20, 0, 1), amount=500)])
 
