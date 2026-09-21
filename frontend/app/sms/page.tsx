@@ -90,7 +90,7 @@ export default function SmsPage() {
         </div>
         <div className="section-body flush">
           {logs.loading && !logs.data ? (
-            <Loading text={"Loading SMS activity\u2026"} />
+            <Loading text={"Loading SMS activity..."} />
           ) : logs.error ? (
             <div className="section-body">
               <ErrorBlock message="We couldn't load SMS activity." onRetry={logs.reload} />

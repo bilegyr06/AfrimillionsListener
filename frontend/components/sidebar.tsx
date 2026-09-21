@@ -101,7 +101,7 @@ export default function Sidebar() {
           <span className={`dot ${serviceOk === true ? "dot-ok" : serviceOk === false ? "dot-bad" : "dot-pending"}`} />
           {serviceOk === true && "Service online"}
           {serviceOk === false && "Service unreachable"}
-          {serviceOk === null && "Checking\u2026"}
+          {serviceOk === null && "Checking..."}
         </span>
       </div>
     </aside>

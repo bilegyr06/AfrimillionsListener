@@ -62,7 +62,7 @@ export default function ConfirmDialog({
           disabled={busy}
           onClick={onConfirm}
         >
-          {busy ? "Working\u2026" : confirmLabel}
+          {busy ? "Working..." : confirmLabel}
         </button>
       </div>
     </dialog>

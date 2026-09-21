@@ -23,7 +23,7 @@ function SplitMetric({
   return (
     <Metric
       label={title}
-      value={`Campaign ${formatPercentage(side.campaign_percentage)} \u00b7 Control ${formatPercentage(side.control_percentage)}`}
+      value={`Campaign ${formatPercentage(side.campaign_percentage)}, Control ${formatPercentage(side.control_percentage)}`}
     />
   );
 }
@@ -39,7 +39,7 @@ export default function SplitSection({ split }: Props) {
             label="Actual (assigned)"
             value={
               split.actual.total_users > 0
-                ? `${formatNumber(split.actual.campaign_users)} Campaign \u00b7 ${formatNumber(split.actual.control_users)} Control`
+                ? `${formatNumber(split.actual.campaign_users)} Campaign, ${formatNumber(split.actual.control_users)} Control`
                 : "No audience yet"
             }
           />

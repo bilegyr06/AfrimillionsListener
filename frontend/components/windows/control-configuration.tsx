@@ -107,7 +107,7 @@ export default function ControlConfiguration({ window, onChanged, flash }: Props
                   style={{ flex: 1 }}
                 />
                 <button className="btn btn-primary" disabled={busy} onClick={saveOverride}>
-                  {busy ? "Saving\u2026" : "Save"}
+                  {busy ? "Saving..." : "Save"}
                 </button>
               </div>
               <span className="field-hint">

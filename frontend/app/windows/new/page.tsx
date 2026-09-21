@@ -68,7 +68,7 @@ export default function NewWindowPage() {
           <h1>New campaign window</h1>
         </div>
         <div className="section">
-          <Loading text={"Loading segments\u2026"} />
+          <Loading text={"Loading segments..."} />
         </div>
       </div>
     );
@@ -162,7 +162,7 @@ export default function NewWindowPage() {
                   />
                   <span>
                     {segment.label}
-                    {segment.default ? <span className="muted"> \u00b7 default</span> : null}
+                    {segment.default ? <span className="muted"> default</span> : null}
                   </span>
                 </label>
               ))}
@@ -210,7 +210,7 @@ export default function NewWindowPage() {
 
       <div className="page-actions">
         <button className="btn btn-primary" disabled={busy} onClick={handleSubmit}>
-          {busy ? "Creating\u2026" : "Create window"}
+          {busy ? "Creating..." : "Create window"}
         </button>
       </div>
     </div>

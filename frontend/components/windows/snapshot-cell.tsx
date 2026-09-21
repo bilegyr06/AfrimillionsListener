@@ -17,7 +17,7 @@ export default function SnapshotCell({ capturedAt, files }: Props) {
   return (
     <details>
       <summary className="small">
-        {files.length} files \u00b7 captured {formatDateTime(capturedAt)}
+        {files.length} files captured {formatDateTime(capturedAt)}
       </summary>
       {files.length > 0 ? (
         <table className="table" style={{ marginTop: 8 }}>

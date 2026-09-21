@@ -45,7 +45,7 @@ export function CampaignSelect({
           <option key={c.campaign_id} value={c.campaign_id}>
             {campaignDisplayName(c.name, c.campaign_id)}
             {c.status === "active" ? " \u2014 Active" : ""}
-            {" \u00b7 "}
+            {" "}
             {formatDate(c.started_at)}
           </option>
         ))}

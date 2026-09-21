@@ -29,8 +29,8 @@ function SplitCell({ row }: { row: CampaignWindowRow }) {
   return (
     <div className="small">
       <div>
-        Campaign {formatPercentage(actual.campaign_percentage)}
-        {"\u00b7"} Control {formatPercentage(actual.control_percentage)}
+        Campaign {formatPercentage(actual.campaign_percentage)},
+        Control {formatPercentage(actual.control_percentage)}
       </div>
       <div className="muted">
         {formatNumber(actual.campaign_users)} / {formatNumber(actual.control_users)}
@@ -71,7 +71,7 @@ export default function WindowsPage() {
         </div>
         {windows.loading && !windows.data ? (
           <div className="section-body">
-            <Loading text={"Loading campaign windows\u2026"} />
+            <Loading text={"Loading campaign windows..."} />
           </div>
         ) : windows.error ? (
           <div className="section-body">
@@ -130,7 +130,7 @@ export default function WindowsPage() {
                     </td>
                     <td className="small num">
                       {formatNumber(w.runs_count)}
-                      {w.running_runs.length > 0 ? ` \u00b7 ${w.running_runs.length} running` : ""}
+                      {w.running_runs.length > 0 ? `${w.running_runs.length} running` : ""}
                     </td>
                     <td className="small muted">{deadlineText}</td>
                   </tr>

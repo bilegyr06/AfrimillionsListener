@@ -139,10 +139,10 @@ describe("window split presentation", () => {
   it("renders both sides of recommended, effective, and actual splits", () => {
     const markup = renderToStaticMarkup(<SplitSection split={splitFixture} />);
     expect(markup).toContain("Recommended split");
-    expect(markup).toContain("Campaign 80% \u00b7 Control 20%");
+    expect(markup).toContain("Campaign 80%, Control 20%");
     expect(markup).toContain("Effective split");
-    expect(markup).toContain("Campaign 85% \u00b7 Control 15%");
-    expect(markup).toContain("1,700 Campaign \u00b7 300 Control");
+    expect(markup).toContain("Campaign 85%, Control 15%");
+    expect(markup).toContain("1,700 Campaign, 300 Control");
     expect(markup).toContain("overridden by the operator");
     expect(markup).toContain("never reassigned by a later run or upload");
   });

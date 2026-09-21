@@ -254,7 +254,7 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
               },
               {
                 label: "Awaiting delivery",
-                value: `${formatNumber(r.sms.sent_awaiting_delivery)}${r.sms.unmatched > 0 ? ` \u00b7 ${formatNumber(r.sms.unmatched)} unmatched to delivery log` : ""}`,
+                value: `${formatNumber(r.sms.sent_awaiting_delivery)}${r.sms.unmatched > 0 ? `${formatNumber(r.sms.unmatched)} unmatched to delivery log` : ""}`,
               },
               {
                 label: "Avg cost per accepted SMS",

@@ -89,7 +89,7 @@ export default function StatisticsPage() {
       >
         {campaigns.loading && !campaigns.data ? (
           <div className="section-body">
-            <Loading text={"Loading campaign statistics\u2026"} />
+            <Loading text={"Loading campaign statistics..."} />
           </div>
         ) : campaigns.error ? (
           <div className="section-body">
@@ -104,7 +104,7 @@ export default function StatisticsPage() {
           </div>
         ) : detail.loading && !detail.data ? (
           <div className="section-body">
-            <Loading text={"Loading campaign report\u2026"} />
+            <Loading text={"Loading campaign report..."} />
           </div>
         ) : detail.error || !detail.data ? (
           <div className="section-body">
@@ -146,7 +146,7 @@ export default function StatisticsPage() {
         }
       >
         {campaigns.loading && !campaigns.data ? (
-          <Loading text={"Loading campaign statistics\u2026"} />
+          <Loading text={"Loading campaign statistics..."} />
         ) : campaigns.error ? (
           <div className="section-body">
             <ErrorBlock
@@ -227,7 +227,7 @@ export default function StatisticsPage() {
                     </td>
                     <td
                       className="small num"
-                      title={`${c.audience.opportunities} opportunities \u00b7 ${c.audience.unique_customers} unique customers`}
+                      title={`${c.audience.opportunities} opportunities, ${c.audience.unique_customers} unique customers`}
                     >
                       {formatNumber(c.audience.unique_customers)}
                     </td>

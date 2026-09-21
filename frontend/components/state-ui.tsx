@@ -1,6 +1,6 @@
 "use client";
 
-export function Loading({ text = "Loading\u2026" }: { text?: string }) {
+export function Loading({ text = "Loading..." }: { text?: string }) {
   return (
     <div className="loading" role="status" aria-live="polite">
       <span className="spinner" />

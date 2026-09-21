@@ -186,7 +186,7 @@ function RunsSection({
         setResult({ runId, kind: "dispatch", text: dispatchResultText(res) });
       } else {
         await apiPost(`/runs/${runId}/${action}`);
-        flash({ kind: "success", text: `Run \u00b7 ${action} accepted.` });
+        flash({ kind: "success", text: `Run ${action} accepted.` });
       }
       onChanged();
     } catch (err) {
@@ -209,7 +209,7 @@ function RunsSection({
               style={{ flex: "1 1 240px" }}
             />
             <button className="btn btn-primary" disabled={starting} onClick={startRun}>
-              {starting ? "Starting\u2026" : "Start run"}
+              {starting ? "Starting..." : "Start run"}
             </button>
           </div>
         </div>
@@ -218,7 +218,7 @@ function RunsSection({
       {result && (
         <div className="section-body">
           <Notice kind="success" dismissMs={12000}>
-            <strong>Run #{result.runId}</strong> \u00b7 {result.text}
+            <strong>Run #{result.runId}</strong> {result.text}
           </Notice>
         </div>
       )}
@@ -260,7 +260,7 @@ function RunsSection({
                           disabled={busyRun !== null}
                           onClick={() => act(run.id, "dispatch")}
                         >
-                          {busyRun === run.id ? "Dispatching\u2026" : "Dispatch SMS"}
+                          {busyRun === run.id ? "Dispatching..." : "Dispatch SMS"}
                         </button>
                         <button
                           className="btn btn-danger-secondary btn-sm"
@@ -314,7 +314,7 @@ function DataStateSection({ windowId, status }: { windowId: number; status: stri
     <StatSection title="Source data">
       {state.loading && !state.data ? (
         <div className="section-body">
-          <Loading text={"Loading data state\u2026"} />
+          <Loading text={"Loading data state..."} />
         </div>
       ) : state.error ? (
         <div className="section-body">
@@ -655,7 +655,7 @@ function OverviewTab({ window, now }: { window: WindowDetail; now: Date }) {
           </MetricStrip>
           <MetricStrip>
             <Metric label="Campaign / Control" value={splitText} />
-            <Metric label="Runs" value={`${formatNumber(window.runs.length)}${window.runs.filter(r => r.status === "running").length > 0 ? ` \u00b7 ${formatNumber(window.runs.filter(r => r.status === "running").length)} running` : ""}`} />
+            <Metric label="Runs" value={`${formatNumber(window.runs.length)}${window.runs.filter(r => r.status === "running").length > 0 ? `${formatNumber(window.runs.filter(r => r.status === "running").length)} running` : ""}`} />
           </MetricStrip>
         </div>
       </StatSection>
@@ -822,7 +822,7 @@ export default function WindowWorkspacePage() {
           </Link>
         </div>
         <div className="section">
-          <Loading text={"Loading campaign window\u2026"} />
+          <Loading text={"Loading campaign window..."} />
         </div>
       </div>
     );
@@ -874,7 +874,7 @@ export default function WindowWorkspacePage() {
           <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>
             {formatDate(window.start_time)}
             {"\u2009\u2192\u2009"}
-            {formatDate(window.end_time)} \u00b7 {window.business_timezone}
+            {formatDate(window.end_time)}, {window.business_timezone}
           </p>
         </div>
         <div className="actions">
@@ -941,7 +941,7 @@ export default function WindowWorkspacePage() {
         {report.loading && !report.data ? (
           <div className="section">
             <div className="section-body">
-              <Loading text={"Loading window report\u2026"} />
+              <Loading text={"Loading window report..."} />
             </div>
           </div>
         ) : report.error ? (
@@ -959,7 +959,7 @@ export default function WindowWorkspacePage() {
         {report.loading && !report.data ? (
           <div className="section">
             <div className="section-body">
-              <Loading text={"Loading window report\u2026"} />
+              <Loading text={"Loading window report..."} />
             </div>
           </div>
         ) : report.error ? (

@@ -94,7 +94,7 @@ export function CampaignComparison({ ids, onClose }: Props) {
     >
       {loading && !data ? (
         <div className="section-body">
-          <Loading text={"Loading comparison\u2026"} />
+          <Loading text={"Loading comparison..."} />
         </div>
       ) : error ? (
         <div className="section-body">

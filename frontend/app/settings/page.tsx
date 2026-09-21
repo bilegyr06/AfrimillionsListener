@@ -111,7 +111,7 @@ export default function SettingsPage() {
       <div className="page">
         <h1>Settings</h1>
         <div className="section">
-          <Loading text={"Loading settings\u2026"} />
+          <Loading text={"Loading settings..."} />
         </div>
       </div>
     );
@@ -178,7 +178,7 @@ export default function SettingsPage() {
                         disabled={!dirty || savingKey === setting.key}
                         onClick={() => handleSave(setting)}
                       >
-                        {savingKey === setting.key ? "Saving\u2026" : "Save"}
+                        {savingKey === setting.key ? "Saving..." : "Save"}
                       </button>
                     </div>
                   </div>

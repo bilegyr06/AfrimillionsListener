@@ -68,7 +68,7 @@ function ActiveWindowSection({
       <div className="section">
         {header}
         <div className="section-body">
-          <Loading text={"Loading campaign windows\u2026"} />
+          <Loading text={"Loading campaign windows..."} />
         </div>
       </div>
     );
@@ -129,7 +129,7 @@ function ActiveWindowSection({
                   <div className="label">Period</div>
                   <div className="value" style={{ fontSize: 16 }}>
                     {formatDate(w.start_time)}
-                    {"\u2009\u2192\u2009"}
+                    {"→"}
                     {formatDate(w.end_time)}
                   </div>
                   <div className="sub">Finalization {formatRelativeTime(w.finalization_deadline, now)}</div>
@@ -147,7 +147,7 @@ function ActiveWindowSection({
                     {formatNumber(w.eligible_count)}
                   </div>
                   <div className="sub">
-                    Campaign {formatNumber(split.campaign_users)} \u00b7 Control {formatNumber(split.control_users)}
+                    Campaign {formatNumber(split.campaign_users)}, Control {formatNumber(split.control_users)}
                   </div>
                 </div>
                 <div className="stat">
@@ -157,7 +157,7 @@ function ActiveWindowSection({
                   </div>
                   <div className="sub">
                     {formatNumber(w.runs_count)} runs
-                    {w.running_runs.length > 0 ? ` \u00b7 ${formatNumber(w.running_runs.length)} running` : ""}
+                    {w.running_runs.length > 0 ? `${formatNumber(w.running_runs.length)} running` : ""}
                   </div>
                 </div>
               </div>
@@ -234,7 +234,7 @@ export default function DashboardPage() {
       <div className="page">
         <h1>Dashboard</h1>
         <div className="section">
-          <Loading text={"Loading dashboard\u2026"} />
+          <Loading text={"Loading dashboard..."} />
         </div>
       </div>
     );
@@ -310,7 +310,7 @@ export default function DashboardPage() {
         </div>
         <div className="section-body flush">
           {recent.loading && !recent.data ? (
-            <Loading text={"Loading SMS activity\u2026"} />
+            <Loading text={"Loading SMS activity..."} />
           ) : recent.error ? (
             <div className="section-body">
               <ErrorBlock message="We couldn't load SMS activity." onRetry={recent.reload} />

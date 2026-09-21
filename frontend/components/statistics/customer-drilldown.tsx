@@ -44,13 +44,13 @@ export function CustomerDrilldown({ campaignId }: { campaignId: number }) {
         customers.data ? (
           <span className="muted small">{formatNumber(customers.data.total)} customers</span>
         ) : (
-          "\u00a0"
+          " "
         )
       }
     >
       {customers.loading && !customers.data ? (
         <div className="section-body">
-          <Loading text={"Loading customers\u2026"} />
+          <Loading text={"Loading customers..."} />
         </div>
       ) : customers.error ? (
         <div className="section-body">
@@ -84,7 +84,7 @@ export function CustomerDrilldown({ campaignId }: { campaignId: number }) {
                 <tr key={`${row.user_id}-${row.login_at}`}>
                   <td className="small">
                     <span className="strong">{row.user_id}</span>
-                    {row.first_name ? <span className="muted">{` \u00b7 ${row.first_name}`}</span> : null}
+                    {row.first_name ? <span className="muted">{`${row.first_name}`}</span> : null}
                   </td>
                   <td className="small muted">{row.phone_normalized ?? row.phone_raw ?? "\u2014"}</td>
                   <td className="small">{row.opportunity_status}</td>
@@ -96,7 +96,7 @@ export function CustomerDrilldown({ campaignId }: { campaignId: number }) {
                         <div>
                           {isCustomerConverted(row) ? customerOutcomePresentation(row).label : row.intervention_status}
                           {row.response_seconds != null
-                            ? ` \u00b7 ${formatDuration(row.response_seconds)}`
+                            ? `${formatDuration(row.response_seconds)}`
                             : ""}
                         </div>
                         {row.play_at ? (

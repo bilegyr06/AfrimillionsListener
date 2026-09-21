@@ -256,7 +256,7 @@ export function buildStatisticsSnapshot(
   } else {
     for (const g of r.games) {
       lines.push(
-        `  ${g.game_name.padEnd(20)} ${formatNumber(g.plays).padStart(6)} plays \u00b7 ${formatNumber(g.customers).padStart(4)} players \u00b7 ${formatMoney(g.amount)} \u00b7 avg ${formatMoney(g.avg_amount)}`,
+        `  ${g.game_name.padEnd(20)} ${formatNumber(g.plays).padStart(6)} ${formatNumber(g.customers).padStart(4)} players ${formatMoney(g.amount)} avg ${formatMoney(g.avg_amount)}`,
       );
     }
   }
