@@ -186,7 +186,8 @@ export interface FilesResponse {
 
 export interface UploadResponse {
   message: string;
-  record: UploadedFile;
+  records: UploadedFile[];
+  errors: string[];
 }
 
 // ---------------------------------------------------------------------------

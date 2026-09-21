@@ -140,7 +140,7 @@ class TestFilesList:
     def test_lists_upload_success(self, client):
         content = "userId,firstName,phone\n1,Ada,08012345678\n"
         r = client.post("/files", files={"file": ("Registrations_a.csv", content.encode(), "text/csv")})
-        record_id = r.json()["record"]["id"]
+        record_id = r.json()["records"][0]["id"]
         data = client.get("/files").json()
         assert data["items"][0]["id"] == record_id
 

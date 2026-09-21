@@ -23,6 +23,13 @@ def _upload(client, filename: str, content: bytes, expect: int):
     )
 
 
+def _upload_many(client, files: list[tuple[str, bytes]]):
+    return client.post(
+        "/files",
+        files=[("file", (name, content, "text/csv")) for name, content in files],
+    )
+
+
 @pytest.fixture()
 def client(_init_db):
     from fastapi.testclient import TestClient
@@ -40,11 +47,11 @@ class TestUpload:
         r = _upload(client, "Registrations_exports.csv", content, 200)
         data = r.json()
 
-        assert data["record"]["status"] == "succeeded"
-        assert data["record"]["dataset"] == "Registrations"
-        assert data["record"]["row_count"] == 2
+        assert data["records"][0]["status"] == "succeeded"
+        assert data["records"][0]["dataset"] == "Registrations"
+        assert data["records"][0]["row_count"] == 2
         # File landed in the data folder under the recognized prefix.
-        stored = data["record"]["stored_filename"]
+        stored = data["records"][0]["stored_filename"]
         assert stored == "Registrations_exports.csv"
         assert (_isolated_db.parent / "data" / stored).exists()
 
@@ -60,8 +67,8 @@ class TestUpload:
         )
         r = _upload(client, "mystery_export.csv", content, 200)
         data = r.json()
-        assert data["record"]["dataset"] == "Login"
-        assert data["record"]["stored_filename"].startswith("Login_")
+        assert data["records"][0]["dataset"] == "Login"
+        assert data["records"][0]["stored_filename"].startswith("Login_")
 
         from app.services.ingestion import read_login_events
         df = read_login_events()
@@ -73,16 +80,16 @@ class TestUpload:
             "1,G1,10,2026-06-01 10:00:00\n"
         )
         r = _upload(client, "plays_export.csv", content, 200)
-        assert r.json()["record"]["dataset"] == "Sales"
-        assert r.json()["record"]["row_count"] == 1
+        assert r.json()["records"][0]["dataset"] == "Sales"
+        assert r.json()["records"][0]["row_count"] == 1
 
     def test_upload_unparseable_rejected(self, client, _isolated_db):
         # A CSV arriving without a string terminator cannot be parsed -> rejected.
         content = b'"unclosed'
         r = _upload(client, "broken.csv", content, 400)
         data = r.json()
-        assert data["record"]["status"] == "failed"
-        assert data["record"]["parse_error"]
+        assert data["records"][0]["status"] == "failed"
+        assert data["records"][0]["parse_error"]
 
         records = list_files()
         assert len(records) == 1
@@ -101,9 +108,9 @@ class TestUpload:
         )
         r = _upload(client, "../evil.csv", content, 200)
         data = r.json()
-        assert ".." not in data["record"]["stored_filename"]
-        stored = data["record"]["stored_filename"]
-        row = get_file(data["record"]["id"])
+        assert ".." not in data["records"][0]["stored_filename"]
+        stored = data["records"][0]["stored_filename"]
+        row = get_file(data["records"][0]["id"])
         assert row["stored_filename"] == stored
         assert (_isolated_db.parent / "data" / stored).exists()
 
@@ -112,4 +119,48 @@ class TestUpload:
             "userId,firstName,phone\n1,Ada,08012345678\n"
         )
         r = _upload(client, "Registrations_manual.csv", content, 200)
-        assert r.json()["record"]["stored_filename"] == "Registrations_manual.csv"
+        assert r.json()["records"][0]["stored_filename"] == "Registrations_manual.csv"
+
+    def test_upload_multiple_files(self, client, _isolated_db):
+        r = _upload_many(
+            client,
+            [
+                ("Registrations_a.csv", _csv_bytes("userId,firstName,phone\n1,Ada,08012345678\n")),
+                ("Login_b.csv", _csv_bytes("userId,timestamp\n1,2026-06-01 10:00:00\n")),
+            ],
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data["records"]) == 2
+        assert {rec["dataset"] for rec in data["records"]} == {"Registrations", "Login"}
+        assert all(rec["status"] == "succeeded" for rec in data["records"])
+        assert data["errors"] == []
+        assert len(list_files()) == 2
+
+    def test_upload_batch_reports_partial_failure(self, client, _isolated_db):
+        r = _upload_many(
+            client,
+            [
+                ("Registrations_ok.csv", _csv_bytes("userId,firstName,phone\n1,Ada,08012345678\n")),
+                ("broken.csv", b'"unclosed'),
+            ],
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert {rec["status"] for rec in data["records"]} == {"succeeded", "failed"}
+        assert "1 of 2" in data["message"]
+        assert "rejected" in data["message"]
+
+    def test_upload_batch_all_rejected(self, client, _isolated_db):
+        r = _upload_many(
+            client,
+            [
+                ("broken.csv", b'"unclosed'),
+                ("empty.csv", b""),
+            ],
+        )
+        assert r.status_code == 400
+        data = r.json()
+        assert data["records"][0]["status"] == "failed"
+        assert len(data["errors"]) == 1
+        assert "empty" in data["message"].lower()

@@ -9,6 +9,22 @@ import { datasetLabel, fileStatusPresentation, formatDateTime, formatNumber } fr
 import type { CampaignWindowRow, FilesResponse, ReportOverview, SettingsResponse, UploadResponse } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
 
+function describeUpload(result: UploadResponse): string {
+  const accepted = result.records.filter((r) => r.status === "succeeded");
+  const rejected = result.records.length - accepted.length + result.errors.length;
+
+  if (accepted.length === 1 && rejected === 0) {
+    const rec = accepted[0];
+    const rows = rec.row_count;
+    return `Accepted dataset ${datasetLabel(rec.dataset)}${rows != null ? `${formatNumber(rows)} rows` : ""}. It becomes available to the next evaluation run.`;
+  }
+
+  const total = accepted.length + rejected;
+  const parts = [`${formatNumber(accepted.length)} of ${formatNumber(total)} file${total === 1 ? "" : "s"} accepted`];
+  if (rejected > 0) parts.push(`${formatNumber(rejected)} rejected`);
+  return `${parts.join(", ")}. Accepted files become available to the next evaluation run.`;
+}
+
 export default function DataPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -30,21 +46,18 @@ export default function DataPage() {
     (w: CampaignWindowRow) => w.status === "active" && w.running_runs.length > 0
   ) ?? false;
 
-  async function handleUpload(picked: File) {
+  async function handleUpload(picked: File[]) {
+    if (picked.length === 0) return;
     setUploading(true);
     setNotice(null);
     try {
       const form = new FormData();
-      form.append("file", picked);
+      for (const file of picked) form.append("file", file);
       const result = await apiPostForm<UploadResponse>("/files", form);
-      const rows = result.record.row_count;
-      setNotice({
-        kind: "success",
-        text: `${result.message} Dataset ${datasetLabel(result.record.dataset)}${rows != null ? ` \u00b7 ${formatNumber(rows)} rows` : ""}. It becomes available to the next evaluation run.`,
-      });
+      setNotice({ kind: "success", text: describeUpload(result) });
       files.reload();
     } catch (err) {
-      setNotice({ kind: "error", text: err instanceof Error ? err.message : "Upload failed. Is the file a valid CSV?" });
+      setNotice({ kind: "error", text: err instanceof Error ? err.message : "Upload failed. Are the files valid CSVs?" });
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -52,8 +65,8 @@ export default function DataPage() {
   }
 
   function handlePickChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const picked = e.target.files?.[0];
-    if (picked) void handleUpload(picked);
+    const picked = e.target.files;
+    if (picked && picked.length > 0) void handleUpload(Array.from(picked));
   }
 
   const failedCount = files.data?.items.filter((f) => f.status === "failed").length ?? 0;
@@ -116,6 +129,7 @@ export default function DataPage() {
               ref={fileInputRef}
               type="file"
               accept=".csv,text/csv"
+              multiple
               className="hidden-input"
               onChange={handlePickChange}
               disabled={hasActiveRun || uploading}
@@ -125,13 +139,13 @@ export default function DataPage() {
               disabled={hasActiveRun || uploading}
               onClick={() => fileInputRef.current?.click()}
             >
-              {uploading ? "Uploading\u2026" : hasActiveRun ? "Upload blocked (Run active)" : "Upload CSV"}
+              {uploading ? "Uploading..." : hasActiveRun ? "Upload blocked (Run active)" : "Upload CSVs"}
             </button>
           </div>
           <p className="muted" style={{ margin: "10px 0 0", fontSize: 13 }}>
-            CSV must have the same columns as the automated downloads. Parseable files join the matching
-            dataset and are available to the next evaluation run; runs already started stay bound to
-            their own frozen snapshots.
+            Select one or more CSVs. They must have the same columns as the automated downloads. Parseable files
+            join the matching dataset and are available to the next evaluation run; runs already started stay bound
+            to their own frozen snapshots.
           </p>
         </div>
       </section>
@@ -140,13 +154,13 @@ export default function DataPage() {
         <div className="section-head">
           <h2>Upload history</h2>
           <span className="muted" style={{ fontSize: 12.5 }}>
-            {files.data ? `${formatNumber(files.data.items.length)} shown` : "\u00a0"}
-            {failedCount > 0 ? ` \u00b7 ${failedCount} failed` : ""}
+            {files.data ? `${formatNumber(files.data.items.length)} shown` : "0"}
+            {failedCount > 0 ? `${failedCount} failed` : ""}
           </span>
         </div>
         <div className="section-body flush">
           {files.loading && !files.data ? (
-            <Loading text={"Loading uploads\u2026"} />
+            <Loading text={"Loading uploads..."} />
           ) : files.error ? (
             <div className="section-body">
               <ErrorBlock message="We couldn't load the upload history." onRetry={files.reload} />
