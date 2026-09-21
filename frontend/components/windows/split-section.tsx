@@ -51,6 +51,10 @@ export default function SplitSection({ split }: Props) {
             The recommended split was overridden by the operator (Control {formatPercentage(split.control_override)}).
           </p>
         )}
+        <p className="muted" style={{ margin: "0 0 6px", fontSize: 12.5 }}>
+          The effective Control percentage is established once and is fixed for the entire window:
+          growing N never changes the split.
+        </p>
         <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
           Assignment is per user for the whole window: once assigned to Campaign or Control, a user is
           never reassigned by a later run or upload.

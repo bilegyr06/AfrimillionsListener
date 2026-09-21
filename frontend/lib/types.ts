@@ -490,6 +490,7 @@ export interface WindowBase {
   suggested_control_percentage: number | null;
   control_percentage: number | null;
   control_override: number | null;
+  control_locked: boolean;
   eligible_count: number | null;
   segment_eligible_counts: Record<string, number>;
   created_at: string;

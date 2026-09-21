@@ -68,7 +68,7 @@ export default function NewWindowPage() {
           <h1>New campaign window</h1>
         </div>
         <div className="section">
-          <Loading text="Loading segments\u2026" />
+          <Loading text={"Loading segments\u2026"} />
         </div>
       </div>
     );
@@ -199,7 +199,9 @@ export default function NewWindowPage() {
                 onChange={(e) => setOverride(e.target.value)}
               />
               <span className="field-hint">
-                Leave empty to use the recommended split from the backend formula.
+                Leave empty to use the recommended split from the backend formula. The Control
+                percentage is fixed for the whole window once it is established, so choose it
+                deliberately at creation.
               </span>
             </label>
           </div>

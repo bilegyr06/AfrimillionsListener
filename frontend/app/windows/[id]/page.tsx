@@ -8,9 +8,12 @@ import StatusPill from "@/components/status-pill";
 import { Metric, MetricStrip, MetricTier } from "@/components/statistics/metric";
 import StatSection from "@/components/statistics/section";
 import CampaignAttribution from "@/components/windows/campaign-attribution";
+import ControlConfiguration from "@/components/windows/control-configuration";
+import LifecycleControls from "@/components/windows/lifecycle-controls";
 import SnapshotCell from "@/components/windows/snapshot-cell";
 import SplitSection from "@/components/windows/split-section";
 import StatusBanner from "@/components/windows/status-banner";
+import { Tabs, TabPanel } from "@/components/windows/tabs";
 import { ErrorBlock, Loading } from "@/components/state-ui";
 import { apiGet, apiPost } from "@/lib/api";
 import {
@@ -21,7 +24,6 @@ import {
   formatMoney,
   formatNumber,
   formatPercent,
-  formatPercentage,
   formatRatio,
   reportStatePresentation,
   runStatusPresentation,
@@ -114,129 +116,6 @@ function ConfigSection({ window, catalog }: { window: WindowDetail; catalog?: Se
 }
 
 // ---------------------------------------------------------------------------
-// Operator forms (eligible count + control override)
-// ---------------------------------------------------------------------------
-
-function OperatorForms({
-  window,
-  onChanged,
-  flash,
-}: {
-  window: WindowDetail;
-  onChanged: () => void;
-  flash: (f: Flash) => void;
-}) {
-  const [n, setN] = useState("");
-  const [override, setOverride] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
-  const locked = window.status === "finalized";
-
-  async function saveEligible() {
-    const value = Number(n);
-    if (!Number.isInteger(value) || value <= 0) {
-      flash({ kind: "error", text: "Eligible count must be a positive whole number." });
-      return;
-    }
-    setBusy("n");
-    try {
-      await apiPost(`/windows/${window.id}/eligible-count`, { eligible_count: value });
-      flash({ kind: "success", text: "Eligible count saved. The recommended Control % is recalculated." });
-      setN("");
-      onChanged();
-    } catch (err) {
-      flash({ kind: "error", text: err instanceof Error ? err.message : "Could not save the eligible count." });
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function saveOverride() {
-    if (override.trim() === "") {
-      flash({ kind: "error", text: "Enter a Control override percentage." });
-      return;
-    }
-    const value = Number(override);
-    if (Number.isNaN(value) || value <= 0 || value > 50) {
-      flash({ kind: "error", text: "Control override must be a percentage between 0 and 50." });
-      return;
-    }
-    setBusy("override");
-    try {
-      await apiPost(`/windows/${window.id}/control-override`, { percentage: value });
-      flash({ kind: "success", text: `Control override set to ${formatPercentage(value)}.` });
-      setOverride("");
-      onChanged();
-    } catch (err) {
-      flash({ kind: "error", text: err instanceof Error ? err.message : "Could not set the override." });
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  return (
-    <StatSection title="Configure">
-      <div className="section-body">
-        {locked ? (
-          <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-            This window is finalized and immutable — configuration can no longer be changed.
-          </p>
-        ) : (
-          <div className="form-grid">
-            <div className="field">
-              <label htmlFor="eligible-count">Eligible count (N)</label>
-              <div style={{ display: "flex", gap: 8 }}>
-                <input
-                  id="eligible-count"
-                  className="input"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={n}
-                  placeholder="e.g. 20000"
-                  onChange={(e) => setN(e.target.value)}
-                  style={{ flex: 1 }}
-                />
-                <button className="btn btn-secondary" disabled={busy !== null} onClick={saveEligible}>
-                  {busy === "n" ? "Saving\u2026" : "Save"}
-                </button>
-              </div>
-              <span className="field-hint">
-                Sum of eligible users across the selected segments. Used to compute the recommended
-                Control %.
-              </span>
-            </div>
-
-            <div className="field">
-              <label htmlFor="control-override">Control override %</label>
-              <div style={{ display: "flex", gap: 8 }}>
-                <input
-                  id="control-override"
-                  className="input"
-                  type="number"
-                  min={0}
-                  max={50}
-                  step="0.1"
-                  value={override}
-                  placeholder="e.g. 15"
-                  onChange={(e) => setOverride(e.target.value)}
-                  style={{ flex: 1 }}
-                />
-                <button className="btn btn-secondary" disabled={busy !== null} onClick={saveOverride}>
-                  {busy === "override" ? "Saving\u2026" : "Save"}
-                </button>
-              </div>
-              <span className="field-hint">
-                Overrides the recommended split (max 50%). Existing assignments are never rewritten.
-              </span>
-            </div>
-          </div>
-        )}
-      </div>
-    </StatSection>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Runs (operator surface)
 // ---------------------------------------------------------------------------
 
@@ -254,17 +133,41 @@ function RunsSection({
   const [busyRun, setBusyRun] = useState<number | null>(null);
   const [result, setResult] = useState<{
     runId: number;
-    kind: "evaluate" | "dispatch";
+    kind: "start" | "dispatch";
     text: string;
   } | null>(null);
 
-  const needsEligibility = window.eligible_count === null || window.audience.total === 0;
+  interface StartRunResponse {
+  run: { id: number };
+  evaluation?: {
+    candidates: number;
+    audience: { added: number; campaign: number; control: number; existing: number; invalid_phone: number };
+    eligible_count: number | null;
+  };
+}
 
   async function startRun() {
     setStarting(true);
     try {
-      await apiPost(`/windows/${window.id}/runs`, { note: note.trim() === "" ? null : note.trim() });
-      flash({ kind: "success", text: "Run started with a frozen snapshot of the current data." });
+      const res = await apiPost<StartRunResponse>(`/windows/${window.id}/runs`, {
+        note: note.trim() === "" ? null : note.trim(),
+      });
+      // The run now includes evaluation results from the atomic start
+      const evalResult = res.evaluation;
+      if (evalResult) {
+        setResult({
+          runId: res.run.id,
+          kind: "start",
+          text: `Evaluated ${evalResult.candidates} candidates. Added ${evalResult.audience.added} (${evalResult.audience.campaign} Campaign / ${evalResult.audience.control} Control); ${evalResult.audience.existing} already present; ${evalResult.audience.invalid_phone} invalid phones. Eligible count is now ${evalResult.eligible_count !== null ? evalResult.eligible_count : "unchanged"}.`,
+        });
+      } else {
+        setResult({
+          runId: res.run.id,
+          kind: "start",
+          text: "Run started with a frozen snapshot of the current data.",
+        });
+      }
+      flash({ kind: "success", text: "Run started — target audience frozen." });
       setNote("");
       onChanged();
     } catch (err) {
@@ -274,14 +177,11 @@ function RunsSection({
     }
   }
 
-  async function act(runId: number, action: "evaluate" | "dispatch" | "stop" | "complete") {
+  async function act(runId: number, action: "dispatch" | "stop" | "complete") {
     setBusyRun(runId);
     setResult(null);
     try {
-      if (action === "evaluate") {
-        const res = await apiPost<EvaluateRunResponse>(`/runs/${runId}/evaluate`);
-        setResult({ runId, kind: "evaluate", text: evaluateResultText(res) });
-      } else if (action === "dispatch") {
+      if (action === "dispatch") {
         const res = await apiPost<DispatchResult>(`/runs/${runId}/dispatch`);
         setResult({ runId, kind: "dispatch", text: dispatchResultText(res) });
       } else {
@@ -312,12 +212,6 @@ function RunsSection({
               {starting ? "Starting\u2026" : "Start run"}
             </button>
           </div>
-          {needsEligibility && (
-            <p className="muted" style={{ margin: "10px 0 0", fontSize: 12.5 }}>
-              No audience yet. After starting, use <strong>Evaluate</strong> to build the audience from
-              the run&apos;s frozen snapshot.
-            </p>
-          )}
         </div>
       )}
 
@@ -362,14 +256,7 @@ function RunsSection({
                     {running ? (
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button
-                          className="btn btn-secondary btn-sm"
-                          disabled={busyRun !== null}
-                          onClick={() => act(run.id, "evaluate")}
-                        >
-                          {busyRun === run.id ? "Evaluating\u2026" : "Evaluate"}
-                        </button>
-                        <button
-                          className="btn btn-secondary btn-sm"
+                          className="btn btn-primary btn-sm"
                           disabled={busyRun !== null}
                           onClick={() => act(run.id, "dispatch")}
                         >
@@ -408,8 +295,7 @@ function RunsSection({
         </table>
         <div className="section-body">
           <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
-            This run uses a snapshot of the data available at start. Later uploads do not change this
-            run&apos;s target.
+            Runs use a snapshot of data at start. Later uploads do not affect the run's target.
           </p>
         </div>
       </div>
@@ -428,7 +314,7 @@ function DataStateSection({ windowId, status }: { windowId: number; status: stri
     <StatSection title="Source data">
       {state.loading && !state.data ? (
         <div className="section-body">
-          <Loading text="Loading data state\u2026" />
+          <Loading text={"Loading data state\u2026"} />
         </div>
       ) : state.error ? (
         <div className="section-body">
@@ -703,6 +589,210 @@ function ReportSection({ report }: { report: WindowReport }) {
 }
 
 // ---------------------------------------------------------------------------
+// Tab components
+// ---------------------------------------------------------------------------
+
+function OverviewTab({ window, now }: { window: WindowDetail; now: Date }) {
+  const split = window.split.actual;
+  const splitText =
+    split.total_users > 0
+      ? `${formatNumber(split.campaign_users)} / ${formatNumber(split.control_users)}`
+      : "No audience yet";
+
+  return (
+    <div>
+      <StatSection title="Window">
+        <div className="section-body">
+          <table className="kv">
+            <tbody>
+              <tr>
+                <th>Status</th>
+                <td>
+                  <StatusPill {...windowStatusPresentation(window.status)} />
+                </td>
+              </tr>
+              <tr>
+                <th>Period</th>
+                <td>
+                  {formatDate(window.start_time)}
+                  {"\u2009\u2192\u2009"}
+                  {formatDate(window.end_time)}
+                </td>
+              </tr>
+              <tr>
+                <th>Finalization</th>
+                <td>
+                  {window.finalized_at
+                    ? `Frozen ${formatDateTime(window.finalized_at)}`
+                    : `Deadline ${formatDateTime(window.finalization_deadline)}`}
+                </td>
+              </tr>
+              <tr>
+                <th>Time zone</th>
+                <td>{window.business_timezone}</td>
+              </tr>
+              <tr>
+                <th>Segments</th>
+                <td>{window.selected_segments.map((id) => segmentLabel(id, [])).join(", ")}</td>
+              </tr>
+              <tr>
+                <th>Assignment</th>
+                <td>{assignmentMethodLabel(window.assignment_method)}</td>
+              </tr>
+              <tr>
+                <th>Eligible (N)</th>
+                <td>{formatNumber(window.eligible_count)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="section-body flush">
+          <MetricStrip>
+            <Metric label="Eligible (N)" value={formatNumber(window.eligible_count)} />
+            <Metric label="Campaign" value={formatNumber(window.audience.campaign)} />
+            <Metric label="Control" value={formatNumber(window.audience.control)} />
+            <Metric label="Total" value={formatNumber(window.audience.total)} />
+          </MetricStrip>
+          <MetricStrip>
+            <Metric label="Campaign / Control" value={splitText} />
+            <Metric label="Runs" value={`${formatNumber(window.runs.length)}${window.runs.filter(r => r.status === "running").length > 0 ? ` \u00b7 ${formatNumber(window.runs.filter(r => r.status === "running").length)} running` : ""}`} />
+          </MetricStrip>
+        </div>
+      </StatSection>
+
+      <StatSection title="Runs">
+        <div className="section-body flush">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>Status</th>
+                <th>Started</th>
+                <th>Ended</th>
+                <th>Note</th>
+                <th>Frozen snapshot</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {window.runs.map((run) => {
+                const status = runStatusPresentation(run.status);
+                return (
+                  <tr key={run.id}>
+                    <td className="small">Run #{run.id}</td>
+                    <td>
+                      <StatusPill {...runStatusPresentation(run.status)} />
+                    </td>
+                    <td className="small muted">{formatDateTime(run.started_at)}</td>
+                    <td className="small muted">{formatDateTime(run.ended_at)}</td>
+                    <td className="small muted">{run.note ?? "\u2014"}</td>
+                    <td className="small">
+                      <SnapshotCell capturedAt={run.snapshot.captured_at} files={run.snapshot.files} />
+                    </td>
+                    <td className="small">
+                      {run.status === "running" ? (
+                        <span className="muted">Running</span>
+                      ) : (
+                        <span className="muted">Completed</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {window.runs.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="small muted">
+                    No runs started for this window yet.
+                  </td>
+                </tr>
+) : null}
+            </tbody>
+          </table>
+        </div>
+        </StatSection>
+      </div>
+    );
+  }
+
+function AudienceTab({ window }: { window: WindowDetail }) {
+  return (
+    <div>
+      <SplitSection split={window.split} />
+    </div>
+  );
+}
+
+function SourceDataTab({ windowId, status }: { windowId: number; status: string }) {
+  return <DataStateSection windowId={windowId} status={status} />;
+}
+
+function StatisticsTab({ report }: { report: WindowReport }) {
+  return (
+    <div>
+      <CampaignAttribution group={report.groups.campaign} />
+      <GroupMetrics group={report.groups.campaign} title="Campaign group" />
+      <GroupMetrics group={report.groups.control} title="Control group" />
+      <StatSection title="Games">
+        {(["campaign", "control"] as const).map((kind) => {
+          const games = report.games[kind];
+          return (
+            <div className="section-body flush" key={`games-${kind}`}>
+              <h3 style={{ margin: "0 20px 8px", fontSize: 13, textTransform: "capitalize" }}>
+                {kind} group
+              </h3>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Game</th>
+                    <th>Plays</th>
+                    <th>Customers</th>
+                    <th>Amount</th>
+                    <th>Avg amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {games.map((g) => (
+                    <tr key={g.game_name}>
+                      <td className="small">{g.game_name}</td>
+                      <td className="small num">{formatNumber(g.plays)}</td>
+                      <td className="small num">{formatNumber(g.customers)}</td>
+                      <td className="small num">{formatMoney(g.amount)}</td>
+                      <td className="small num">{formatMoney(g.avg_amount)}</td>
+                    </tr>
+                  ))}
+                  {games.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="small muted">
+                        No plays in this group.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          );
+        })}
+      </StatSection>
+      <RunContributionsTable report={report} />
+    </div>
+  );
+}
+
+function ReportTab({ report }: { report: WindowReport }) {
+  return <ReportSection report={report} />;
+}
+
+function ConfigurationTab({ window, onChanged, flash }: { window: WindowDetail; onChanged: () => void; flash: (f: Flash) => void }) {
+  return (
+    <div>
+      <ConfigSection window={window} catalog={[]} />
+      <SplitSection split={window.split} />
+      <ControlConfiguration window={window} onChanged={onChanged} flash={flash} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -711,6 +801,7 @@ export default function WindowWorkspacePage() {
   const windowId = Number(params.id);
   const now = useNow(60000);
   const [flash, setFlash] = useState<Flash | null>(null);
+  const [activeTab, setActiveTab] = useState("overview");
 
   const detail = useQuery<WindowDetail>(() => apiGet(`/windows/${windowId}`), [windowId], 30000);
   const segments = useQuery<SegmentsResponse>(() => apiGet("/segments"), []);
@@ -731,7 +822,7 @@ export default function WindowWorkspacePage() {
           </Link>
         </div>
         <div className="section">
-          <Loading text="Loading campaign window\u2026" />
+          <Loading text={"Loading campaign window\u2026"} />
         </div>
       </div>
     );
@@ -760,6 +851,16 @@ export default function WindowWorkspacePage() {
   const reportState = reportStatePresentation(window.report_state);
   const catalog = segments.data?.items;
   const reportLoaded = report.data !== null;
+
+  const tabs = [
+    { id: "overview", label: "Overview" },
+    { id: "runs", label: "Runs" },
+    { id: "audience", label: "Audience" },
+    { id: "source-data", label: "Source Data" },
+    { id: "statistics", label: "Statistics" },
+    { id: "report", label: "Report" },
+    { id: "configuration", label: "Configuration" },
+  ];
 
   return (
     <div className="page">
@@ -799,27 +900,82 @@ export default function WindowWorkspacePage() {
         now={now}
       />
 
-      <ConfigSection window={window} catalog={catalog} />
-      <SplitSection split={window.split} />
-      <OperatorForms window={window} onChanged={reloadAll} flash={setFlash} />
-      <RunsSection window={window} onChanged={reloadAll} flash={setFlash} />
-      <DataStateSection windowId={window.id} status={window.status} />
+      <div className="section">
+        <LifecycleControls
+          windowId={window.id}
+          status={window.status}
+          endTime={window.end_time}
+          finalizationDeadline={window.finalization_deadline}
+          finalizedAt={window.finalized_at}
+          now={now}
+          onChanged={reloadAll}
+          flash={setFlash}
+        />
+      </div>
 
-      {report.loading && !report.data ? (
-        <div className="section">
-          <div className="section-body">
-            <Loading text="Loading window report\u2026" />
+      {flash && (
+        <Notice kind={flash.kind} dismissMs={7000}>
+          {flash.text}
+        </Notice>
+      )}
+
+      <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
+
+      <TabPanel id="overview" active={activeTab === "overview"}>
+        <OverviewTab window={window} now={now} />
+      </TabPanel>
+
+      <TabPanel id="runs" active={activeTab === "runs"}>
+        <RunsSection window={window} onChanged={reloadAll} flash={setFlash} />
+      </TabPanel>
+
+      <TabPanel id="audience" active={activeTab === "audience"}>
+        <AudienceTab window={window} />
+      </TabPanel>
+
+      <TabPanel id="source-data" active={activeTab === "source-data"}>
+        <SourceDataTab windowId={window.id} status={window.status} />
+      </TabPanel>
+
+      <TabPanel id="statistics" active={activeTab === "statistics"}>
+        {report.loading && !report.data ? (
+          <div className="section">
+            <div className="section-body">
+              <Loading text={"Loading window report\u2026"} />
+            </div>
           </div>
-        </div>
-      ) : report.error ? (
-        <div className="section">
-          <div className="section-body">
-            <ErrorBlock message="We couldn't load this window's report." onRetry={report.reload} />
+        ) : report.error ? (
+          <div className="section">
+            <div className="section-body">
+              <ErrorBlock message="We couldn't load this window's report." onRetry={report.reload} />
+            </div>
           </div>
-        </div>
-      ) : reportLoaded ? (
-        <ReportSection report={report.data as WindowReport} />
-      ) : null}
+        ) : reportLoaded ? (
+          <StatisticsTab report={report.data as WindowReport} />
+        ) : null}
+      </TabPanel>
+
+      <TabPanel id="report" active={activeTab === "report"}>
+        {report.loading && !report.data ? (
+          <div className="section">
+            <div className="section-body">
+              <Loading text={"Loading window report\u2026"} />
+            </div>
+          </div>
+        ) : report.error ? (
+          <div className="section">
+            <div className="section-body">
+              <ErrorBlock message="We couldn't load this window's report." onRetry={report.reload} />
+            </div>
+          </div>
+        ) : reportLoaded ? (
+          <ReportTab report={report.data as WindowReport} />
+        ) : null}
+      </TabPanel>
+
+      <TabPanel id="configuration" active={activeTab === "configuration"}>
+        <ConfigurationTab window={window} onChanged={reloadAll} flash={setFlash} />
+      </TabPanel>
     </div>
   );
 }

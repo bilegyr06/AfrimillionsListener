@@ -1,10 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import CampaignAttribution from "@/components/windows/campaign-attribution";
+import ControlConfiguration from "@/components/windows/control-configuration";
 import SnapshotCell from "@/components/windows/snapshot-cell";
 import SplitSection from "@/components/windows/split-section";
 import StatusBanner from "@/components/windows/status-banner";
-import type { WindowGroupMetrics, WindowSplitSummary } from "@/lib/types";
+import type { WindowDetail, WindowGroupMetrics, WindowSplitSummary } from "@/lib/types";
 
 const NOW = new Date("2026-09-16T09:00:00.000Z");
 
@@ -184,5 +185,107 @@ describe("run snapshot cell", () => {
   it("renders 'No snapshot' when a run has none", () => {
     const markup = renderToStaticMarkup(<SnapshotCell capturedAt={null} files={[]} />);
     expect(markup).toContain("No snapshot");
+  });
+});
+
+const windowDetailFixture: WindowDetail = {
+  id: 1,
+  name: "September push",
+  status: "active",
+  start_time: "2026-09-15T09:00:00.000Z",
+  end_time: "2026-09-19T09:00:00.000Z",
+  finalization_deadline: "2026-09-20T14:00:00.000Z",
+  finalized_at: null,
+  ended_at: null,
+  business_timezone: "Africa/Lagos",
+  selected_segments: ["vip"],
+  assignment_method: "deterministic",
+  suggested_control_percentage: 20,
+  control_percentage: null,
+  control_override: null,
+  control_locked: false,
+  eligible_count: null,
+  segment_eligible_counts: {},
+  created_at: "2026-09-14T09:00:00.000Z",
+  updated_at: "2026-09-15T09:00:00.000Z",
+  audience: { total: 0, campaign: 0, control: 0 },
+  split: splitFixture,
+  runs: [],
+  report_state: "live",
+};
+
+const noop = () => {};
+
+describe("control percentage configuration", () => {
+  it("offers the editable override before the first Run even after N is set", () => {
+    // A manual eligible-count call computes an effective percentage but must
+    // not lock the configuration; only the first Run locks it.
+    const markup = renderToStaticMarkup(
+      <ControlConfiguration
+        window={{ ...windowDetailFixture, control_percentage: 10 }}
+        onChanged={noop}
+        flash={noop}
+      />,
+    );
+    expect(markup).toContain('id="control-override"');
+    expect(markup).toContain(">Save<");
+    expect(markup).toContain("fixed for the entire window");
+    expect(markup).not.toContain("Configuration locked");
+  });
+
+  it("renders the locked percentage read-only and drops the input and Save action", () => {
+    const markup = renderToStaticMarkup(
+      <ControlConfiguration
+        window={{
+          ...windowDetailFixture,
+          control_locked: true,
+          control_percentage: 15,
+          control_override: 15,
+        }}
+        onChanged={noop}
+        flash={noop}
+      />,
+    );
+    expect(markup).not.toContain('id="control-override"');
+    expect(markup).not.toContain(">Save<");
+    expect(markup).toContain("15%");
+    expect(markup).toContain("fixed for the entire window");
+    expect(markup).toContain("can no longer be changed");
+  });
+
+  it("stays read-only during grace and finalization", () => {
+    const markup = renderToStaticMarkup(
+      <ControlConfiguration
+        window={{
+          ...windowDetailFixture,
+          status: "ended",
+          control_locked: true,
+          control_percentage: 15,
+          control_override: 15,
+        }}
+        onChanged={noop}
+        flash={noop}
+      />,
+    );
+    expect(markup).not.toContain('id="control-override"');
+    expect(markup).toContain("15%");
+    expect(markup).toContain("grace period or after finalization");
+  });
+
+  it("locks configuration when a Run started without establishing a percentage", () => {
+    const markup = renderToStaticMarkup(
+      <ControlConfiguration
+        window={{
+          ...windowDetailFixture,
+          status: "finalized",
+          finalized_at: "2026-09-20T13:00:00.000Z",
+          control_locked: true,
+        }}
+        onChanged={noop}
+        flash={noop}
+      />,
+    );
+    expect(markup).not.toContain('id="control-override"');
+    expect(markup).toContain("Configuration locked");
   });
 });

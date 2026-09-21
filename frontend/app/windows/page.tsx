@@ -71,7 +71,7 @@ export default function WindowsPage() {
         </div>
         {windows.loading && !windows.data ? (
           <div className="section-body">
-            <Loading text="Loading campaign windows\u2026" />
+            <Loading text={"Loading campaign windows\u2026"} />
           </div>
         ) : windows.error ? (
           <div className="section-body">
