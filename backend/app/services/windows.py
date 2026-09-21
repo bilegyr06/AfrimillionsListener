@@ -12,7 +12,10 @@ Implements the business rules for the Campaign Window model:
     eligible audience; the window sums those per-segment counts into N.
   * Control calculation: C = 15,500 / N + 1,550; if C >= 0.5*N use 50%,
     otherwise Control% = C / N * 100, bucketed (<10% -> 10, <15% -> 15,
-    <20% -> 20, else the calculated value). The operator may override.
+    <20% -> 20, else the calculated value). The operator may provide an
+    override when creating the Window (or before the effective percentage is
+    established); once the effective Control percentage is established it is
+    fixed for the entire window and is never recomputed as N grows.
   * Campaign/Control assignment is Window-level and persistent per user.
     Deterministic assignment uses (user_id % 100) < campaign_percentage;
     random assignment uses a stable per-window/user seed so it never changes a
@@ -34,6 +37,7 @@ from app.core.config import settings
 from app.core.phones import gate_phone
 from app.db import windows as db
 from app.db.windows import WindowConfigError, WindowStateError
+from app.services import eligibility
 
 UNSEGMENTED = "unsegmented"
 
@@ -122,6 +126,10 @@ def create_window(
     Defaults (Africa/Lagos): start Monday 00:00, end Saturday 23:59:59,
     finalization deadline Sunday 14:00. The deadline may be configured no later
     than Sunday 17:00 for the corresponding window.
+
+    Only one Campaign Window runs at a time: creating a window while another
+    window is 'active' is rejected (the persistence layer enforces the same
+    rule inside the insert transaction).
     """
     ref = dates.now_business() if now is None else dates.as_business(now)
 
@@ -165,6 +173,14 @@ def create_window(
         )
     if control_override is not None and not (0 < control_override <= 50):
         raise WindowConfigError("Control override must be in the range (0, 50] percent.")
+
+    active = db.get_active_window()
+    if active is not None:
+        raise WindowStateError(
+            f"Only one Campaign Window can run at a time: Campaign Window "
+            f"#{active['id']} is already active. End or finalize it before "
+            "creating another window."
+        )
 
     now_iso = dates.to_utc_iso(ref)
     return db.create_window(
@@ -338,11 +354,19 @@ def set_eligible_count(
     eligible_count: int,
     segment_counts: dict[str, int] | None = None,
 ) -> dict:
-    """Set N (the summed eligible audience across selected segments) and the
-    effective control percentage.
+    """Set N (the summed eligible audience across selected segments) and, the
+    first time, the effective control percentage.
 
     If `segment_counts` is provided, its values must sum to `eligible_count`
     (each selected segment contributes its eligible users to N).
+
+    The effective Control percentage is established from the first N that is
+    configured: the formula suggestion is computed from that N, and the operator
+    override (when present) wins over it. Once a value exists it is frozen -
+    later calls only update N and the per-segment counts (growing N never
+    re-derives or moves the split). This does NOT lock the configuration: the
+    operator may still change the override until the window's first Campaign Run
+    starts, at which point the percentage becomes immutable for the whole window.
     """
     if eligible_count <= 0:
         raise WindowConfigError("eligible_count (N) must be a positive integer.")
@@ -369,17 +393,21 @@ def set_eligible_count(
 def set_control_override(window_id: int, percentage: float) -> dict:
     """Persist an operator override of the effective control percentage.
 
-    Allowed up to 50%. If N is already configured, the effective
-    control_percentage is updated immediately; existing audience assignments
-    are never rewritten (each member records the config that produced it).
+    Allowed up to 50%. Valid only BEFORE the window's first Campaign Run starts
+    (an override provided at window creation, or this endpoint before the first
+    Run). Starting the first Run locks the Control percentage for the entire
+    window: a later call raises WindowStateError even while the window is
+    active, and the lock holds even when that first Run admits no eligible
+    users. Before the lock, the override immediately becomes the effective
+    percentage when N is already known; otherwise it stays pending until N (or
+    the first Run) establishes it. Existing audience assignments are never
+    rewritten (each member records the config that produced it).
     """
     if not (0 < percentage <= 50):
         raise WindowConfigError("Control override must be in the range (0, 50] percent.")
     window = db.set_control_override(window_id, percentage)
     if window is None:
         raise WindowStateError(f"Campaign Window #{window_id} not found.")
-    if window["eligible_count"] is not None:
-        window = set_eligible_count(window_id, window["eligible_count"])
     return window
 
 
@@ -413,20 +441,41 @@ def end_window(window_id: int) -> dict:
     return {**window, "closed_runs": closed_runs}
 
 
-def finalize_window(window_id: int) -> dict:
+def finalize_window(window_id: int, *, now: datetime | None = None) -> dict:
     """Permanently finalize an ended window (grace period over). Immutable after.
 
     Before the terminal transition, the Window report is computed from the
     persisted facts (ingesting any grace-period uploads first) and frozen into
     window_reports. Finalization then freezes the window itself; afterward the
     report is the frozen snapshot and cannot change.
+
+    Clock guards: finalization is only valid while the window's grace period is
+    open - `now` must be at/after the scheduled `end_time` (a window manually
+    ended early stays in grace until end_time) and at/before the configured
+    `finalization_deadline`. Pass `now` explicitly (business-zone aware) for
+    deterministic tests; it defaults to the current wall clock.
     """
     from app.services.window_report import build_report, freeze_report
 
+    window = db.get_window(window_id)
+    if window is None:
+        raise WindowStateError(f"Campaign Window #{window_id} not found.")
+    instant = dates.as_business(now) if now is not None else dates.now_business()
+    end_time = dates.parse_utc_iso(window["end_time"])
+    deadline = dates.parse_utc_iso(window["finalization_deadline"])
+    if instant < end_time:
+        raise WindowStateError(
+            f"Cannot finalize Campaign Window #{window_id}: now ({instant.isoformat()}) "
+            f"is before the scheduled end time ({end_time.isoformat()}). Grace starts "
+            "at end_time."
+        )
+    if instant > deadline:
+        raise WindowStateError(
+            f"Cannot finalize Campaign Window #{window_id}: the finalization deadline "
+            f"({deadline.isoformat()}) has passed."
+        )
     report = build_report(window_id, ingest=True)
-    window = db.finalize_window_transition(
-        window_id, dates.to_utc_iso(dates.now_business())
-    )
+    window = db.finalize_window_transition(window_id, dates.to_utc_iso(instant))
     report["window"].update(
         {"status": window["status"], "finalized_at": window["finalized_at"]}
     )
@@ -490,13 +539,14 @@ def capture_source_snapshot(window_id: int, now: datetime | None = None) -> list
     return entries or []
 
 
-def start_run(window_id: int, note: str | None = None) -> dict:
-    """Start a Campaign Run in an active window with a frozen data snapshot.
+def start_run(window_id: int, note: str | None = None, *, now: datetime | None = None) -> dict:
+    """Start a Campaign Run: snapshot source data, evaluate eligibility, freeze target.
 
-    The snapshot is captured at start; a source-file upload after the run
-    starts cannot silently change the run's eligibility/audience input.
+    This is an atomic operation: the Run is created, its source snapshot captured,
+    eligibility evaluated against that snapshot, and the complete target audience
+    admitted with run_id set. The Run target is immutable after this point.
     """
-    started_at = dates.now_business()
+    started_at = dates.as_business(now) if now is not None else dates.now_business()
     files = capture_source_snapshot(window_id, started_at)
     snapshot, run = db.create_run_with_snapshot(
         window_id,
@@ -506,7 +556,12 @@ def start_run(window_id: int, note: str | None = None) -> dict:
         files_snapshot=files,
         snapshot_notes="Captured at run start from the data folder.",
     )
-    return {"run": run, "snapshot": snapshot}
+
+    # Build the complete Run target: evaluate eligibility against the frozen snapshot
+    # and admit all eligible users with this run_id. This happens once at start.
+    evaluation = eligibility.build_run_target(run["id"], now=started_at)
+
+    return {"run": run, "snapshot": snapshot, "evaluation": evaluation}
 
 
 def stop_run(run_id: int, stop_reason: str = "operator") -> dict:
@@ -535,6 +590,21 @@ def get_run_snapshot(run_id: int) -> dict:
     return snapshot
 
 
+def has_active_run(window_id: int) -> bool:
+    """Check if any Run in the window is currently 'running'."""
+    runs = db.list_runs(window_id)
+    return any(r["status"] == "running" for r in runs)
+
+
+def any_window_has_active_run() -> bool:
+    """Check if ANY window has a running Run (for global upload blocking)."""
+    windows = db.list_windows()
+    for w in windows:
+        if has_active_run(w["id"]):
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Audience + assignment
 # ---------------------------------------------------------------------------
@@ -548,15 +618,21 @@ def add_eligible_users(window_id: int, members: list[dict]) -> dict:
         segment_id (str) - the selected segment that qualified the user,
         eligibility_state (optional dict) - relevant source/eligibility state,
         phone (str, optional) - raw phone; normalized + validity snapshotted,
-        phone_valid (bool, optional) - explicit phone-validity override,
+        phone_valid (bool, optional) - explicit exclusion only: False forces
+                        exclusion; True can never approve a phone the canonical
+                        gate fails; None (absent) derives from the gate.
         run_id (int, optional) - the Campaign Run whose evaluation admitted
                         this member (that Run's frozen dispatch target).
 
     Only NEW users are assigned (existing members keep their assignment for the
-    whole window). Members whose phone is unusable (phone_valid False, whatever
-    the source) are NOT admitted to the audience at all: they never count toward
-    N, never receive an assignment, and can never become SMS recipients. The
-    count of skipped invalid-phone members is reported back as `invalid_phone`.
+    whole window). The eligible audience is system-derived and fixed once the
+    window is active: admission is only allowed while the window is 'active'
+    (the evaluation step); it is blocked during grace and after finalize.
+    Members whose phone is unusable (failed normalization, whatever the source)
+    are NOT admitted to the audience at all: they never count toward N, never
+    receive an assignment, and can never become SMS recipients. The count of
+    skipped invalid-phone members is reported back as `invalid_phone`. No member
+    is ever stored with phone_normalized NULL.
     """
     window = db.get_window(window_id)
     if window is None:
@@ -566,9 +642,11 @@ def add_eligible_users(window_id: int, members: list[dict]) -> dict:
             "No control percentage configured for this window. Configure the "
             "eligible count (N) or an operator control override before assigning."
         )
-    if window["status"] == "finalized":
+    if window["status"] != "active":
         raise WindowStateError(
-            f"Cannot add audience members: Campaign Window #{window_id} is finalized."
+            f"Cannot add audience members: Campaign Window #{window_id} is "
+            f"{window['status']!r}; the eligible audience is fixed once the window "
+            "is active."
         )
 
     campaign_pct = campaign_percentage_for(window["control_percentage"])
@@ -605,13 +683,11 @@ def add_eligible_users(window_id: int, members: list[dict]) -> dict:
 
         phone_raw = str(m["phone"]) if m.get("phone") not in (None, "") else None
         normalized = gate_phone(phone_raw) if phone_raw else None
-        # An explicit phone_valid bool overrides the canonical gate; None (the
-        # schema default / absence of the key) means "derive from the gate".
-        phone_valid = (
-            bool(m.get("phone_valid"))
-            if m.get("phone_valid") is not None
-            else normalized is not None
-        )
+        # normalize-or-exclude: a member is only admitted when the canonical
+        # gate normalized a real phone. An explicit phone_valid flag can only
+        # force exclusion (False); True can never approve an unparseable or
+        # missing phone; None (absent) derives from the gate.
+        phone_valid = normalized is not None and m.get("phone_valid") is not False
 
         if not phone_valid:
             invalid_phone += 1
@@ -627,7 +703,7 @@ def add_eligible_users(window_id: int, members: list[dict]) -> dict:
                 "entered_at": now_iso,
                 "eligibility_state": m.get("eligibility_state") or {},
                 "phone_raw": phone_raw,
-                "phone_normalized": normalized if phone_valid else None,
+                "phone_normalized": normalized,
                 "phone_valid": phone_valid,
                 "run_id": m.get("run_id"),
             }
@@ -642,11 +718,12 @@ def add_eligible_users(window_id: int, members: list[dict]) -> dict:
 def refresh_eligible_counts(window_id: int) -> dict | None:
     """Recompute N from the audience actually held, by segment.
 
-    Used after evaluations so N/control track the admitted audience (e.g. a
-    user is never counted before their phone is validated). Honors an operator
-    control override (the override, when present, is kept as the effective
-    control percentage). When the audience is empty the current N/control is
-    left untouched and None is returned (an empty N cannot be configured).
+    Used after evaluations so N tracks the admitted audience (e.g. a user is
+    never counted before their phone is validated). The effective Control
+    percentage is established once and is never recomputed here: growing N
+    updates eligible_count but cannot move the percentage. When the audience
+    is empty the current N/control is left untouched and None is returned (an
+    empty N cannot be configured).
     """
     window = db.get_window(window_id)
     if window is None:

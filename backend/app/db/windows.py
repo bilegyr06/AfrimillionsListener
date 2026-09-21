@@ -6,10 +6,18 @@ operations run inside a single write transaction (BEGIN IMMEDIATE) and re-read
 the window row under that lock so races around run-start / window-end /
 finalize / audience-insert are serialized by SQLite's single writer.
 
-Immutability boundary: every mutator raises `WindowStateError` when the owning
-window is `finalized`. The guard lives here in the persistence layer - a
-finalized window cannot be mutated even if a caller bypasses the service layer.
-This is the enforced freeze, not a UI-level hiding.
+Immutability boundary: the effective Control percentage is fixed for a
+window from the moment it is established (an operator override, or the
+formula suggestion when the window's audience/config is first set). N may
+grow but the split is never recomputed or changed again, even while the
+window is still active. The window's operator-defined configuration (control
+split, eligible count, end time) and its eligible audience are otherwise
+established while the window is 'active' and become immutable the moment it
+ends. The grace period never permits configuration or audience changes
+(facts/metrics may still be ingested for the report), and finalization
+additionally freezes the report. These guards live here in the persistence
+layer - the boundary holds even if a caller bypasses the service layer. This
+is the enforced freeze, not a UI-level hiding.
 
 Persistence convention: timestamps are UTC-aware ISO strings as produced by
 app.core.dates.to_utc_iso; JSON columns (segments, assignment config,
@@ -50,10 +58,18 @@ def _row_to_dict(row) -> dict:
     return dict(row) if row is not None else None
 
 
-def _ensure_not_finalized(window: dict, action: str):
-    if window["status"] == "finalized":
+def _ensure_active(window: dict, action: str):
+    """Configuration/audience mutators are valid only while a window is active.
+
+    The operator-defined configuration (control split, eligible count, end
+    time) and the eligible audience are fixed for the window once established:
+    no operator or system change is allowed once the window has ended (entered
+    grace) or been finalized.
+    """
+    if window["status"] != "active":
         raise WindowStateError(
-            f"Cannot {action}: Campaign Window #{window['id']} is finalized and immutable."
+            f"Cannot {action}: Campaign Window #{window['id']} is {window['status']!r}; "
+            "the configuration and audience of a window are fixed once it is active."
         )
 
 
@@ -62,42 +78,63 @@ def _ensure_not_finalized(window: dict, action: str):
 # ---------------------------------------------------------------------------
 
 def create_window(record: dict) -> dict:
-    """Insert a new 'active' Campaign Window. Returns the persisted row."""
-    conn = get_connection()
-    cursor = conn.execute(
-        """
-        INSERT INTO campaign_windows (
-            name, status, start_time, end_time, finalization_deadline,
-            business_timezone, selected_segments, assignment_method,
-            suggested_control_percentage, control_percentage, control_override,
-            eligible_count, segment_eligible_counts, created_at, updated_at
-        ) VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            record.get("name"),
-            record["start_time"],
-            record["end_time"],
-            record["finalization_deadline"],
-            record.get("business_timezone", "Africa/Lagos"),
-            json.dumps(record.get("selected_segments", [])),
-            record.get("assignment_method", "deterministic"),
-            record.get("suggested_control_percentage"),
-            record.get("control_percentage"),
-            record.get("control_override"),
-            record.get("eligible_count"),
-            json.dumps(record.get("segment_eligible_counts", {})),
-            record.get("created_at", _now()),
-            record.get("updated_at", _now()),
-        ),
-    )
-    window = _row_to_dict(
-        conn.execute(
-            "SELECT * FROM campaign_windows WHERE id = ?", (cursor.lastrowid,)
+    """Insert a new 'active' Campaign Window. Returns the persisted row.
+
+    Single-active guard: only one Campaign Window may run at a time, so the
+    insert is rejected (WindowStateError) while any window is still 'active'.
+    The guard runs inside the write transaction, so two concurrent creates
+    cannot both win (SQLite's single writer serializes BEGIN IMMEDIATE).
+    """
+    conn = _tx()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM campaign_windows WHERE status = 'active' "
+            "ORDER BY start_time DESC LIMIT 1"
         ).fetchone()
-    )
-    conn.commit()
-    conn.close()
-    return _decode_window(window)
+        if existing:
+            raise WindowStateError(
+                "Only one Campaign Window can run at a time: Campaign Window "
+                f"#{existing['id']} is already active. End or finalize it before "
+                "creating another window."
+            )
+        cursor = conn.execute(
+            """
+            INSERT INTO campaign_windows (
+                name, status, start_time, end_time, finalization_deadline,
+                business_timezone, selected_segments, assignment_method,
+                suggested_control_percentage, control_percentage, control_override,
+                eligible_count, segment_eligible_counts, created_at, updated_at
+            ) VALUES (?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.get("name"),
+                record["start_time"],
+                record["end_time"],
+                record["finalization_deadline"],
+                record.get("business_timezone", "Africa/Lagos"),
+                json.dumps(record.get("selected_segments", [])),
+                record.get("assignment_method", "deterministic"),
+                record.get("suggested_control_percentage"),
+                record.get("control_percentage"),
+                record.get("control_override"),
+                record.get("eligible_count"),
+                json.dumps(record.get("segment_eligible_counts", {})),
+                record.get("created_at", _now()),
+                record.get("updated_at", _now()),
+            ),
+        )
+        window = _row_to_dict(
+            conn.execute(
+                "SELECT * FROM campaign_windows WHERE id = ?", (cursor.lastrowid,)
+            ).fetchone()
+        )
+        conn.commit()
+        return _decode_window(window)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def get_window(window_id: int) -> dict | None:
@@ -138,6 +175,8 @@ def _decode_window(window: dict | None) -> dict | None:
                 window[key] = json.loads(window[key])
             except (TypeError, ValueError):
                 window[key] = [] if key == "selected_segments" else {}
+    if "control_locked" in window:
+        window["control_locked"] = bool(window["control_locked"])
     return window
 
 
@@ -164,7 +203,15 @@ def update_window_control(
         )
         if window is None:
             raise WindowStateError(f"Campaign Window #{window_id} not found.")
-        _ensure_not_finalized(window, "change the control configuration")
+        _ensure_active(window, "change the control configuration")
+        # The effective Control percentage (and the formula suggestion that
+        # produced it) are established once and then fixed for the whole
+        # window: only N and the per-segment counts may grow. The freeze holds
+        # even if a caller passes new percentages - a later evaluation or
+        # upload can never move the split.
+        if window["control_percentage"] is not None:
+            suggested_control_percentage = window["suggested_control_percentage"]
+            control_percentage = window["control_percentage"]
         counts = (
             json.dumps(segment_eligible_counts)
             if segment_eligible_counts is not None
@@ -204,10 +251,15 @@ def update_window_control(
 def set_control_override(window_id: int, percentage: float) -> dict:
     """Persist an operator override for the effective control percentage.
 
-    The override only takes effect as the effective `control_percentage` when
-    the eligible count is configured (update_window_control) - it replaces the
-    formula-suggested value. The override itself is persisted immediately, but
-    existing audience assignments are never rewritten.
+    Valid only BEFORE the window's first Campaign Run starts (an override
+    provided when the window is created, or set via this endpoint before the
+    first Run). Starting the first Run locks the configuration for the whole
+    window: a later override raises WindowStateError even while the window is
+    active, and this holds even when that first Run admits no eligible users.
+    Before the lock, the override immediately becomes the effective
+    `control_percentage` when N is already known; otherwise it stays pending
+    until N (or the first Run) establishes the effective value. Existing
+    audience assignments are never rewritten.
     """
     conn = _tx()
     try:
@@ -218,10 +270,22 @@ def set_control_override(window_id: int, percentage: float) -> dict:
         )
         if window is None:
             raise WindowStateError(f"Campaign Window #{window_id} not found.")
-        _ensure_not_finalized(window, "change the control override")
+        _ensure_active(window, "change the control override")
+        if window["control_locked"]:
+            raise WindowStateError(
+                f"Cannot change the control override: Campaign Window #{window_id} "
+                "has already started a Campaign Run; the Control percentage is "
+                "fixed for the entire window once the first Run starts."
+            )
+        effective = (
+            percentage
+            if window["eligible_count"] is not None
+            else window["control_percentage"]
+        )
         conn.execute(
-            "UPDATE campaign_windows SET control_override = ?, updated_at = ? WHERE id = ?",
-            (percentage, _now(), window_id),
+            "UPDATE campaign_windows SET control_override = ?, control_percentage = ?, "
+            "updated_at = ? WHERE id = ?",
+            (percentage, effective, _now(), window_id),
         )
         conn.commit()
         window = _row_to_dict(
@@ -248,7 +312,7 @@ def update_window_end(window_id: int, end_time: str) -> dict:
         )
         if window is None:
             raise WindowStateError(f"Campaign Window #{window_id} not found.")
-        _ensure_not_finalized(window, "change the window end time")
+        _ensure_active(window, "change the window end time")
         conn.execute(
             "UPDATE campaign_windows SET end_time = ?, updated_at = ? WHERE id = ?",
             (end_time, _now(), window_id),
@@ -416,6 +480,13 @@ def create_run_with_snapshot(
             "UPDATE run_snapshots SET run_id = ? WHERE id = ?",
             (run_id, snapshot_id),
         )
+        # Starting a Run locks the Control percentage configuration for the
+        # entire window, regardless of how many eligible users the Run admits
+        # (a Run with zero eligible users still locks it).
+        conn.execute(
+            "UPDATE campaign_windows SET control_locked = 1, updated_at = ? WHERE id = ?",
+            (run_created_at, window_id),
+        )
         conn.commit()
         run = dict(
             conn.execute(
@@ -549,12 +620,14 @@ def get_run_snapshot(run_id: int) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def insert_audience_members(window_id: int, members: list[dict]) -> dict:
-    """Add audience members to a window, ignoring users already present.
+    """Add audience members to an active window, ignoring users already present.
 
-    Allowed while the window is active AND during the grace period (ended);
-    blocked once finalized. Existing members are never rewritten - their
-    assignment persists for the whole window (a later upload / eligibility
-    change does not reassign them). Returns per-batch counts.
+    The eligible audience is system-derived and fixed for the window: inserts
+    are allowed only while the window is 'active' (the evaluation step, and
+    only that step, admits new users). Blocked during grace (ended) and after
+    finalize. Existing members are never rewritten - their assignment persists
+    for the whole window (a later upload / eligibility change does not reassign
+    them). Returns per-batch counts.
     """
     if not members:
         return {"added": 0, "existing": 0, "campaign": 0, "control": 0}
@@ -567,7 +640,7 @@ def insert_audience_members(window_id: int, members: list[dict]) -> dict:
         )
         if window is None:
             raise WindowStateError(f"Campaign Window #{window_id} not found.")
-        _ensure_not_finalized(window, "add audience members")
+        _ensure_active(window, "add audience members")
         known = {
             str(r["user_id"])
             for r in conn.execute(

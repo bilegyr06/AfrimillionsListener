@@ -243,6 +243,7 @@ def init_db():
             suggested_control_percentage REAL,
             control_percentage REAL,
             control_override REAL,
+            control_locked INTEGER NOT NULL DEFAULT 0,
             eligible_count INTEGER,
             segment_eligible_counts TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
@@ -309,6 +310,21 @@ def init_db():
     # Run's evaluation admits them, and no later Run re-admits them (existing
     # members are never rewritten), so run_id never changes once set.
     _ensure_column(conn, "window_audiences", "run_id", "INTEGER")
+
+    # Control percentage configuration lock. Set when the window's first
+    # Campaign Run starts; from that moment the Control percentage is fixed for
+    # the entire window (the operator may only change it before the first Run,
+    # and a Run that admits no eligible users still locks it).
+    _ensure_column(
+        conn, "campaign_windows", "control_locked", "INTEGER NOT NULL DEFAULT 0"
+    )
+    # Backfill for databases created before the column existed: any window that
+    # already has a Campaign Run is locked.
+    conn.execute(
+        "UPDATE campaign_windows SET control_locked = 1 "
+        "WHERE control_locked = 0 AND id IN "
+        "(SELECT DISTINCT window_id FROM campaign_runs)"
+    )
 
     # Frozen Campaign Window report snapshots (v2.0.0 finalization). A
     # finalized Window serves the report persisted here; the report is

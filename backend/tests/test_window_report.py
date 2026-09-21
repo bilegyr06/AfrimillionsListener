@@ -69,6 +69,12 @@ def _phone(uid: str) -> str:
     return f"080{int(uid):0>8}"
 
 
+# _setup windows run Mon 2026-09-14 -> Sat 2026-09-19 23:59:59 with a Sun
+# 2026-09-20 14:00 finalization deadline; this instant sits inside that grace
+# period so finalize clock guards are deterministic (never wall-clock).
+FINALIZE_AT = _dt(2026, 9, 20, 9, 0, 0)
+
+
 def _setup(_init_db):
     win = svc.create_window(name="test", start_time=_dt(2026, 9, 14))
     svc.set_control_override(win["id"], 50.0)
@@ -606,7 +612,7 @@ class TestFinalization:
         insert_play_records([_play("1", _dt(2026, 9, 14, 10), amount=100)])
 
         svc.end_window(win["id"])
-        finalized = svc.finalize_window(win["id"])
+        finalized = svc.finalize_window(win["id"], now=FINALIZE_AT)
         assert finalized["status"] == "finalized"
         assert finalized["finalized_at"] is not None
 
@@ -622,7 +628,7 @@ class TestFinalization:
         insert_play_records([_play("1", _dt(2026, 9, 14, 10), amount=100)])
 
         svc.end_window(win["id"])
-        svc.finalize_window(win["id"])
+        svc.finalize_window(win["id"], now=FINALIZE_AT)
         before = window_report.get_report(win["id"])
         assert before["groups"]["campaign"]["total_played_users"] == 1
 
@@ -640,7 +646,7 @@ class TestFinalization:
         run1 = svc.start_run(win["id"])["run"]["id"]
         _add_members(win["id"], run1, CAMPAIGN_IDS)
         with pytest.raises(Exception):
-            svc.finalize_window(win["id"])  # still active
+            svc.finalize_window(win["id"], now=FINALIZE_AT)  # still active
 
     def test_live_report_counts_grace_period_uploads(self, _init_db):
         win = _setup(_init_db)
@@ -656,7 +662,7 @@ class TestFinalization:
         before = window_report.get_report(win["id"])
         assert before["groups"]["campaign"]["total_sales"] == 300.0
 
-        svc.finalize_window(win["id"])
+        svc.finalize_window(win["id"], now=FINALIZE_AT)
         frozen = window_report.get_report(win["id"])
         assert frozen["groups"]["campaign"]["total_sales"] == 300.0
 
