@@ -111,7 +111,7 @@ export default function SettingsPage() {
       <div className="page">
         <h1>Settings</h1>
         <div className="section">
-          <Loading text="Loading settings\u2026" />
+          <Loading text={"Loading settings\u2026"} />
         </div>
       </div>
     );
