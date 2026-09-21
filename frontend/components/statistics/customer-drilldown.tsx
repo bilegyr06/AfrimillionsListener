@@ -50,7 +50,7 @@ export function CustomerDrilldown({ campaignId }: { campaignId: number }) {
     >
       {customers.loading && !customers.data ? (
         <div className="section-body">
-          <Loading text="Loading customers\u2026" />
+          <Loading text={"Loading customers\u2026"} />
         </div>
       ) : customers.error ? (
         <div className="section-body">

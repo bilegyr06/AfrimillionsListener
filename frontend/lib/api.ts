@@ -14,9 +14,13 @@ export class ApiError extends Error {
 
 async function readError(res: Response): Promise<string> {
   try {
-    const body = (await res.json()) as { message?: string };
+    const body = (await res.json()) as { message?: string; detail?: unknown };
     if (body && typeof body.message === "string" && body.message.trim()) {
       return body.message;
+    }
+    // FastAPI-style validation/state errors arrive as {"detail": "..."}.
+    if (body && typeof body.detail === "string" && body.detail.trim()) {
+      return body.detail;
     }
   } catch {
     // not JSON; fall through

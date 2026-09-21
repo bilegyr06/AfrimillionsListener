@@ -1,14 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import CampaignPerformance from "@/components/campaign-performance";
-import {
-  CloseCampaignDialog,
-  StartCampaignDialog,
-  useCampaignActions,
-} from "@/components/campaign-actions";
 import Notice from "@/components/notice";
 import StatusPill from "@/components/status-pill";
 import { Empty, ErrorBlock, Loading } from "@/components/state-ui";
@@ -17,8 +10,6 @@ import WalletStatus from "@/components/wallet-status";
 import { apiGet } from "@/lib/api";
 import {
   assignmentMethodLabel,
-  campaignDisplayName,
-  campaignStatusPresentation,
   formatDate,
   formatDateTime,
   formatMoney,
@@ -33,7 +24,6 @@ import {
 } from "@/lib/format";
 import type {
   CampaignWindowRow,
-  CampaignWithStats,
   Paged,
   ReportOverview,
   SegmentsResponse,
@@ -75,41 +65,41 @@ function ActiveWindowSection({
 
   if (windows.loading && !windows.data) {
     return (
-      <section className="section">
+      <div className="section">
         {header}
         <div className="section-body">
-          <Loading text="Loading campaign windows\u2026" />
+          <Loading text={"Loading campaign windows\u2026"} />
         </div>
-      </section>
+      </div>
     );
   }
 
   if (windows.error) {
     return (
-      <section className="section">
+      <div className="section">
         {header}
         <div className="section-body">
           <ErrorBlock message="We couldn't load campaign windows." onRetry={reload} />
         </div>
-      </section>
+      </div>
     );
   }
 
   if (active.length === 0) {
     return (
-      <section className="section">
+      <div className="section">
         {header}
         <div className="section-body">
           <span className="muted" style={{ fontSize: 13 }}>
             No active campaign window right now.
           </span>
         </div>
-      </section>
+      </div>
     );
   }
 
   return (
-    <section className="section">
+    <div className="section">
       {header}
       <div className="section-body flush">
         {active.map((w) => {
@@ -180,23 +170,15 @@ function ActiveWindowSection({
           );
         })}
       </div>
-    </section>
+    </div>
   );
 }
 
 export default function DashboardPage() {
-  const router = useRouter();
   const [notice, setNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
-  const [startOpen, setStartOpen] = useState(false);
-  const [closeOpen, setCloseOpen] = useState(false);
   const [snapshotOpen, setSnapshotOpen] = useState(false);
-  const { busy, start, close } = useCampaignActions();
 
   const overview = useQuery<ReportOverview>(() => apiGet("/report/overview"), [], 30000);
-  const activeCampaign = useQuery<{ active: boolean; campaign?: CampaignWithStats["campaign"] }>(
-    () => apiGet("/campaign/current"),
-    [],
-  );
   const recent = useQuery<Paged<SmsLogEntry>>(() => apiGet("/sms/logs", { page_size: 8 }), []);
   const windows = useQuery<CampaignWindowRow[]>(() => apiGet("/windows"), [], 30000);
   const segments = useQuery<SegmentsResponse>(() => apiGet("/segments"), []);
@@ -227,32 +209,6 @@ export default function DashboardPage() {
     };
   }, [balance.reload]);
 
-  const current = overview.data?.campaign.current ?? null;
-  const active = overview.data?.campaign.active ?? false;
-
-  async function handleStart(name?: string) {
-    try {
-      const result = await start(name);
-      setStartOpen(false);
-      setNotice({ kind: "success", text: `Campaign "${campaignDisplayName(result.campaign.name, result.campaign.id)}" started.` });
-      overview.reload();
-      router.push(`/campaigns/${result.campaign.id}`);
-    } catch (err) {
-      setNotice({ kind: "error", text: err instanceof Error ? err.message : "Could not start the campaign." });
-    }
-  }
-
-  async function handleClose() {
-    try {
-      const result = await close();
-      setCloseOpen(false);
-      setNotice({ kind: "success", text: `Campaign "${campaignDisplayName(result.campaign.name, result.campaign.id)}" closed and finalised.` });
-      overview.reload();
-    } catch (err) {
-      setNotice({ kind: "error", text: err instanceof Error ? err.message : "Could not close the campaign." });
-    }
-  }
-
   if (overview.error) {
     return (
       <div className="page">
@@ -278,7 +234,7 @@ export default function DashboardPage() {
       <div className="page">
         <h1>Dashboard</h1>
         <div className="section">
-          <Loading text="Loading dashboard\u2026" />
+          <Loading text={"Loading dashboard\u2026"} />
         </div>
       </div>
     );
@@ -307,44 +263,6 @@ export default function DashboardPage() {
         </Notice>
       )}
 
-      {active && current ? (
-        <section className="section">
-          <div className="section-head">
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <h2>
-                  {campaignDisplayName(activeCampaign.data?.campaign?.name ?? null, current.campaign_id)}
-                </h2>
-                <StatusPill {...campaignStatusPresentation("active")} />
-              </div>
-              <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>
-                Started {formatDateTime(activeCampaign.data?.campaign?.started_at)}
-              </p>
-            </div>
-            <div className="actions">
-              <Link className="btn btn-secondary btn-sm" href={`/campaigns/${current.campaign_id}`}>
-                View campaign
-              </Link>
-              <button className="btn btn-danger-secondary btn-sm" onClick={() => setCloseOpen(true)}>
-                Close campaign
-              </button>
-            </div>
-          </div>
-          <CampaignPerformance stats={current} showPending />
-        </section>
-      ) : (
-        <section className="section">
-          <div className="section-body">
-            <Notice kind="info" dismissMs={0}>
-              There is no active campaign right now.
-            </Notice>
-            <button className="btn btn-primary" onClick={() => setStartOpen(true)}>
-              Start campaign
-            </button>
-          </div>
-        </section>
-      )}
-
       <ActiveWindowSection
         windows={windows}
         catalog={segments.data?.items}
@@ -352,7 +270,7 @@ export default function DashboardPage() {
         reload={windows.reload}
       />
 
-      <section className="section">
+      <div className="section">
         <div className="section-head">
           <h2>SMS traffic</h2>
         </div>
@@ -381,9 +299,9 @@ export default function DashboardPage() {
             historical={data.wallet}
           />
         </div>
-      </section>
+      </div>
 
-      <section className="section">
+      <div className="section">
         <div className="section-head">
           <h2>Recent SMS activity</h2>
           <Link className="btn btn-secondary btn-sm" href="/sms">
@@ -392,7 +310,7 @@ export default function DashboardPage() {
         </div>
         <div className="section-body flush">
           {recent.loading && !recent.data ? (
-            <Loading text="Loading SMS activity\u2026" />
+            <Loading text={"Loading SMS activity\u2026"} />
           ) : recent.error ? (
             <div className="section-body">
               <ErrorBlock message="We couldn't load SMS activity." onRetry={recent.reload} />
@@ -427,10 +345,8 @@ export default function DashboardPage() {
             </table>
           )}
         </div>
-      </section>
+      </div>
 
-      <StartCampaignDialog open={startOpen} busy={busy} onConfirm={handleStart} onCancel={() => setStartOpen(false)} />
-      <CloseCampaignDialog open={closeOpen} busy={busy} onConfirm={handleClose} onCancel={() => setCloseOpen(false)} />
       <SnapshotDialog
         open={snapshotOpen}
         title="Statistics snapshot"

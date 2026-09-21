@@ -37,7 +37,7 @@ export default function CampaignStatisticsPage() {
           <h1>Statistics</h1>
         </div>
         <div className="section">
-          <Loading text="Loading campaign statistics\u2026" />
+          <Loading text={"Loading campaign statistics\u2026"} />
         </div>
       </div>
     );
