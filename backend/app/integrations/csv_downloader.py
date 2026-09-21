@@ -16,6 +16,7 @@ import sys
 from datetime import datetime, timedelta
 
 from app.core.config import settings
+from app.services.windows import any_window_has_active_run
 
 logging.basicConfig(
     level=logging.INFO,
@@ -182,10 +183,13 @@ async def main():
 
     while True:
         if _in_window():
-            try:
-                await run_download_cycle()
-            except Exception as exc:
-                log.error("Cycle failed: %s", exc)
+            if any_window_has_active_run():
+                log.info("Skipping download cycle: a Campaign Run is currently active.")
+            else:
+                try:
+                    await run_download_cycle()
+                except Exception as exc:
+                    log.error("Cycle failed: %s", exc)
         else:
             log.info("Outside time window – waiting")
 

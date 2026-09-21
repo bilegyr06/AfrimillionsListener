@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 
 from app.db.files import list_files
 from app.services.ingestion import persist_upload
+from app.services.windows import any_window_has_active_run
 
 
 router = APIRouter()
@@ -15,7 +16,18 @@ async def upload_file(file: UploadFile = File(...)):
     The file is validated and parsed at the boundary; unparseable content is
     rejected (nothing written to the data folder). Parseable files are placed
     under a recognized dataset prefix and become visible to the next cycle.
+
+    Rejected if any Campaign Run is currently running (to protect frozen Run targets).
     """
+    if any_window_has_active_run():
+        return JSONResponse(
+            {
+                "message": "Upload rejected: a Campaign Run is currently active. "
+                "Wait for the Run to stop or complete before uploading new source data."
+            },
+            status_code=409,
+        )
+
     content = await file.read()
     if not content:
         return JSONResponse({"message": "Uploaded file is empty."}, status_code=400)

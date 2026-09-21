@@ -6,7 +6,7 @@ import StatusPill from "@/components/status-pill";
 import { Empty, ErrorBlock, Loading } from "@/components/state-ui";
 import { apiGet, apiPostForm } from "@/lib/api";
 import { datasetLabel, fileStatusPresentation, formatDateTime, formatNumber } from "@/lib/format";
-import type { FilesResponse, ReportOverview, SettingsResponse, UploadResponse } from "@/lib/types";
+import type { CampaignWindowRow, FilesResponse, ReportOverview, SettingsResponse, UploadResponse } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
 
 export default function DataPage() {
@@ -17,12 +17,18 @@ export default function DataPage() {
   const files = useQuery<FilesResponse>(() => apiGet("/files"), [], 20000);
   const settings = useQuery<SettingsResponse>(() => apiGet("/settings"), []);
   const overview = useQuery<ReportOverview>(() => apiGet("/report/overview"), [], 30000);
+  const windows = useQuery<CampaignWindowRow[]>(() => apiGet("/windows"), [], 10000);
 
   const scraperEnabled = settings.data?.items.find((s) => s.key === "CSV_DOWNLOADER_ENABLED")?.value === "true";
   const featureLabels: Record<string, string> = { welcome: "Welcome SMS", inactive: "Inactivity SMS" };
   // Active features come from the backend's scoped report, not from parsing
   // the ENABLED_FEATURES setting, so the UI can never drift from the scope.
   const features = overview.data?.features.enabled_features ?? [];
+
+  // Check if any window has a running run
+  const hasActiveRun = windows.data?.some(
+    (w: CampaignWindowRow) => w.status === "active" && w.running_runs.length > 0
+  ) ?? false;
 
   async function handleUpload(picked: File) {
     setUploading(true);
@@ -98,6 +104,13 @@ export default function DataPage() {
           <h2>Manual upload</h2>
         </div>
         <div className="section-body">
+          {hasActiveRun && (
+            <Notice kind="warn" dismissMs={0}>
+              Uploads are temporarily disabled because a Campaign Run is active. The Run's target
+              audience is frozen at start and must not be affected by new source data. Wait for the
+              Run to stop or complete before uploading.
+            </Notice>
+          )}
           <div className="upload-area">
             <input
               ref={fileInputRef}
@@ -105,13 +118,14 @@ export default function DataPage() {
               accept=".csv,text/csv"
               className="hidden-input"
               onChange={handlePickChange}
+              disabled={hasActiveRun || uploading}
             />
             <button
               className="btn btn-primary"
-              disabled={uploading}
+              disabled={hasActiveRun || uploading}
               onClick={() => fileInputRef.current?.click()}
             >
-              {uploading ? "Uploading\u2026" : "Upload CSV"}
+              {uploading ? "Uploading\u2026" : hasActiveRun ? "Upload blocked (Run active)" : "Upload CSV"}
             </button>
           </div>
           <p className="muted" style={{ margin: "10px 0 0", fontSize: 13 }}>
@@ -132,7 +146,7 @@ export default function DataPage() {
         </div>
         <div className="section-body flush">
           {files.loading && !files.data ? (
-            <Loading text="Loading uploads\u2026" />
+            <Loading text={"Loading uploads\u2026"} />
           ) : files.error ? (
             <div className="section-body">
               <ErrorBlock message="We couldn't load the upload history." onRetry={files.reload} />
