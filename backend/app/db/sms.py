@@ -213,7 +213,7 @@ def get_sms_logs(
         params.append(until)
 
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    sql = f"SELECT * FROM sms_log{where} ORDER BY id"
+    sql = f"SELECT * FROM sms_log{where} ORDER BY id DESC"
     if limit is not None:
         sql += " LIMIT ? OFFSET ?"
         params.append(limit)
