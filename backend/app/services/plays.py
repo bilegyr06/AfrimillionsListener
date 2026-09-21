@@ -38,8 +38,8 @@ from pathlib import Path
 import pandas as pd
 
 from app.core.config import settings
-from app.db.files import mark_plays_ingested, sales_file_processed
 from app.db.players import insert_play_records
+from app.services.ingestion import ingest_claimed_file
 
 SALES_COLUMNS = ("userId", "gameName", "amount", "timestamp")
 
@@ -114,28 +114,35 @@ def parse_plays_frame(source_file: str, df: pd.DataFrame) -> dict:
 
     valid = ~invalid
     records: list[dict] = []
-    now = datetime.now(timezone.utc)
+    now_iso = datetime.now(timezone.utc).isoformat()
     future = 0
-    for i in frame.index[valid]:
-        played_at = played_iso.loc[i]
-        if played_at > now.isoformat():
-            future += 1
-        amount = round(float(frame.loc[i, "amount"]), 2)
-        records.append(
-            {
-                "user_id": str(frame.loc[i, "userId"]),
-                "played_at": played_at,
-                "game_name": str(frame.loc[i, "gameName"]),
-                "amount": amount,
-                "source_file": source_file,
-                "source_key": play_source_key(
-                    str(frame.loc[i, "userId"]),
-                    played_at,
-                    str(frame.loc[i, "gameName"]),
-                    amount,
-                ),
-            }
-        )
+    # Column-wise extraction + a records loop, instead of per-cell frame.loc
+    # scalar access: identical semantics (same rows, same order, same dedup key)
+    # without the per-row label lookup that made large inserts quadratic.
+    valid_frame = frame.loc[valid]
+    if len(valid_frame):
+        users = valid_frame["userId"].tolist()
+        games = valid_frame["gameName"].tolist()
+        amounts = valid_frame["amount"].tolist()
+        played_ats = played_iso.reindex(valid_frame.index).tolist()
+        for raw_user, raw_game, raw_amount, played_at in zip(
+            users, games, amounts, played_ats
+        ):
+            if played_at > now_iso:
+                future += 1
+            amount = round(float(raw_amount), 2)
+            uid = str(raw_user)
+            game = str(raw_game)
+            records.append(
+                {
+                    "user_id": uid,
+                    "played_at": played_at,
+                    "game_name": game,
+                    "amount": amount,
+                    "source_file": source_file,
+                    "source_key": play_source_key(uid, played_at, game, amount),
+                }
+            )
 
     # Collapse identical rows inside this frame before touching the database.
     unique_records: list[dict] = []
@@ -158,10 +165,8 @@ def parse_plays_frame(source_file: str, df: pd.DataFrame) -> dict:
     }
 
 
-def ingest_sales_file(path: Path) -> dict:
-    """Ingest one Sales CSV into plays. Returns a per-file report."""
-    name = Path(path).name
-    report = {
+def _empty_sales_report(name: str) -> dict:
+    return {
         "source_file": name,
         "discovered": 0,
         "inserted": 0,
@@ -171,11 +176,15 @@ def ingest_sales_file(path: Path) -> dict:
         "invalid_reasons": {},
         "future": 0,
     }
+
+
+def _ingest_sales_file(path: Path, name: str) -> dict:
+    """Read + persist one Sales CSV (the caller already holds the claim)."""
+    report = _empty_sales_report(name)
     try:
         df = pd.read_csv(
             path,
             dtype={"userId": str, "gameName": str, "amount": str, "timestamp": str},
-            engine="python",
         )
     except Exception as exc:
         report["parse_errors"] = 1
@@ -192,17 +201,33 @@ def ingest_sales_file(path: Path) -> dict:
         report["inserted"] = insert_play_records(parsed["records"])
         report["skipped"] = len(parsed["records"]) - report["inserted"]
     report["skipped"] += parsed["invalid_reasons"].get("duplicate_row", 0)
+    return report
 
-    mark_plays_ingested(name, report)
+
+def ingest_sales_file(path: Path) -> dict:
+    """Ingest one Sales CSV into plays under a single-flight ledger claim.
+
+    Returns a per-file report. When another caller owns the file or it has
+    already been processed, `claimed` is False and the report is an empty stub.
+    """
+    name = Path(path).name
+    claimed, report = ingest_claimed_file(
+        "Sales", name, lambda: _ingest_sales_file(path, name)
+    )
+    if not claimed:
+        stub = _empty_sales_report(name)
+        stub["claimed"] = False
+        return stub
+    report["claimed"] = True
     return report
 
 
 def ingest_new_sales_files() -> dict:
-    """Ingest Sales files not yet marked processed (historical + incremental).
+    """Ingest Sales files not yet processed (historical + incremental).
 
     Files are processed oldest-first by name so cumulative exports replay their
     rows in order and the plays table converges without operator intervention.
-    Repeated calls only ever touch new/not-yet-processed files.
+    Each file is claimed exactly once; repeated calls only ever touch new files.
     """
     files = sorted(glob.glob(str(settings.DATA_FOLDER / settings.SALES_FILE_PATTERN)))
     totals = {
@@ -215,15 +240,14 @@ def ingest_new_sales_files() -> dict:
         "future": 0,
     }
     for f in files:
-        name = Path(f).name
-        if sales_file_processed(name):
+        report = ingest_sales_file(Path(f))
+        if not report.get("claimed"):
             continue
         totals["files"] += 1
-        report = ingest_sales_file(Path(f))
         for key in ("discovered", "inserted", "skipped", "invalid", "parse_errors", "future"):
             totals[key] += report[key]
         print(
-            f"Plays ingest {name}: discovered={report['discovered']} "
+            f"Plays ingest {report['source_file']}: discovered={report['discovered']} "
             f"inserted={report['inserted']} skipped={report['skipped']} "
             f"invalid={report['invalid']} parse_errors={report['parse_errors']} "
             f"future={report['future']} reasons={report['invalid_reasons']}"

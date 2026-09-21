@@ -27,7 +27,7 @@ import pandas as pd
 
 from app.core.config import settings
 from app.db.deposits import insert_deposit_records
-from app.db.files import deposit_file_processed, mark_deposits_ingested
+from app.services.ingestion import ingest_claimed_file
 
 DEPOSIT_COLUMNS = ("userId", "timestamp")
 
@@ -119,10 +119,8 @@ def parse_deposits_frame(source_file: str, df: pd.DataFrame) -> dict:
     }
 
 
-def ingest_deposit_file(path: Path) -> dict:
-    """Ingest one Deposit_events CSV into deposits. Returns a per-file report."""
-    name = Path(path).name
-    report = {
+def _empty_deposit_report(name: str) -> dict:
+    return {
         "source_file": name,
         "discovered": 0,
         "inserted": 0,
@@ -131,11 +129,15 @@ def ingest_deposit_file(path: Path) -> dict:
         "parse_errors": 0,
         "invalid_reasons": {},
     }
+
+
+def _ingest_deposit_file(path: Path, name: str) -> dict:
+    """Read + persist one Deposit_events CSV (caller already holds the claim)."""
+    report = _empty_deposit_report(name)
     try:
         df = pd.read_csv(
             path,
             dtype={"userId": str, "timestamp": str},
-            engine="python",
         )
     except Exception as exc:
         report["parse_errors"] = 1
@@ -151,14 +153,32 @@ def ingest_deposit_file(path: Path) -> dict:
         report["inserted"] = insert_deposit_records(parsed["records"])
         report["skipped"] = len(parsed["records"]) - report["inserted"]
     report["skipped"] += parsed["invalid_reasons"].get("duplicate_row", 0)
+    return report
 
-    mark_deposits_ingested(name, report)
+
+def ingest_deposit_file(path: Path) -> dict:
+    """Ingest one Deposit_events CSV into deposits under a single-flight claim.
+
+    Returns a per-file report; when another caller owns the file or it has
+    already been processed, `claimed` is False and the report is an empty stub.
+    """
+    name = Path(path).name
+    claimed, report = ingest_claimed_file(
+        "Deposit_events", name, lambda: _ingest_deposit_file(path, name)
+    )
+    if not claimed:
+        stub = _empty_deposit_report(name)
+        stub["claimed"] = False
+        return stub
+    report["claimed"] = True
     return report
 
 
 def ingest_new_deposit_files() -> dict:
-    """Ingest Deposit_events files not yet marked processed (historical +
-    incremental). Oldest-first by name; repeated calls only ever touch new files.
+    """Ingest Deposit_events files not yet processed (historical + incremental).
+
+    Oldest-first by name; each file is claimed exactly once so repeated calls
+    only ever touch new files.
     """
     files = sorted(glob.glob(str(settings.DATA_FOLDER / settings.DEPOSIT_FILE_PATTERN)))
     totals = {
@@ -170,15 +190,14 @@ def ingest_new_deposit_files() -> dict:
         "parse_errors": 0,
     }
     for f in files:
-        name = Path(f).name
-        if deposit_file_processed(name):
+        report = ingest_deposit_file(Path(f))
+        if not report.get("claimed"):
             continue
         totals["files"] += 1
-        report = ingest_deposit_file(Path(f))
         for key in ("discovered", "inserted", "skipped", "invalid", "parse_errors"):
             totals[key] += report[key]
         print(
-            f"Deposits ingest {name}: discovered={report['discovered']} "
+            f"Deposits ingest {report['source_file']}: discovered={report['discovered']} "
             f"inserted={report['inserted']} skipped={report['skipped']} "
             f"invalid={report['invalid']} parse_errors={report['parse_errors']} "
             f"reasons={report['invalid_reasons']}"

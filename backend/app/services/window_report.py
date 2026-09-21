@@ -21,11 +21,13 @@ Attribution rule (Campaign only; Control never has conversions):
     intervention are activity, never extra conversions;
   * a play at/before an SMS is never converted and never attributed to a Run.
 
-The report is a pure projection of persisted facts (no CSV rescans except the
-idempotent ingestion of newly uploaded files before a non-finalized compute),
-so a finalized Window's frozen snapshot is reproducible and immutable:
-get_report never recomputes the numbers for a finalized window - it serves the
-snapshot written at finalization, and later uploads cannot change it.
+The report is a pure projection of persisted facts (no CSV rescans): a
+finalized Window's frozen snapshot is reproducible and immutable. get_report
+never recomputes the numbers for a finalized window - it serves the snapshot
+written at finalization, and later uploads cannot change it. Reading a report
+NEVER ingests source files; ingestion happens at explicit operational points
+(manual upload, Run start, Window finalization) via
+app.services.ingestion.ingest_pending_files.
 """
 from __future__ import annotations
 
@@ -49,23 +51,6 @@ def _rate(numerator: float, denominator: float) -> float | None:
 
 def _money(value: float) -> float:
     return round(value, 2)
-
-
-def _ingest_pending_files() -> None:
-    """Ingest newly uploaded Sales/Deposit/Login files into the fact tables.
-
-    Idempotent (files ledger guards each file), so grace-period uploads land
-    in plays/deposits/logins and the next live report reflects them. Fact
-    scope is the window evaluation period, so an upload whose event reaches
-    outside the period never changes the report.
-    """
-    from app.services.deposits import ingest_new_deposit_files
-    from app.services.logins import ingest_new_login_files
-    from app.services.plays import ingest_new_sales_files
-
-    ingest_new_sales_files()
-    ingest_new_deposit_files()
-    ingest_new_login_files()
 
 
 def _fact_boundaries(window: dict) -> tuple[str, str]:
@@ -327,19 +312,16 @@ def _game_stats(user_ids: set[str], plays: list[dict]) -> list[dict]:
     return rows
 
 
-def build_report(window_id: int, *, ingest: bool = True) -> dict:
-    """Compute the Window report from persisted facts.
+def build_report(window_id: int) -> dict:
+    """Compute the Window report purely from already-persisted facts.
 
-    `ingest=True` (default) also syncs newly uploaded Sales/Deposit/Login files
-    into the fact tables first, so a grace-period upload updates a live report.
-    Pass ingest=False to compute purely from already-persisted state.
+    Reading a report never scans or ingests source files; callers that need new
+    uploads reflected must ingest them first at an operational point via
+    app.services.ingestion.ingest_pending_files.
     """
     window = db.get_window(window_id)
     if window is None:
         raise db.WindowStateError(f"Campaign Window #{window_id} not found.")
-
-    if ingest:
-        _ingest_pending_files()
 
     low, high = _fact_boundaries(window)
     low_utc = window["start_time"]
@@ -508,10 +490,10 @@ def get_report(window_id: int) -> dict:
         frozen = wr.get_frozen_report(window_id)
         if frozen and frozen.get("schema_version") == REPORT_SCHEMA_VERSION:
             return frozen
-        report = build_report(window_id, ingest=False)
+        report = build_report(window_id)
         # A finalized window must never re-derive from freshly uploaded files:
         # freeze what the persisted facts already contain.
         wr.save_frozen_report(window_id, report)
         return report
 
-    return build_report(window_id, ingest=True)
+    return build_report(window_id)

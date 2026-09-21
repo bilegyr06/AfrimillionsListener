@@ -455,6 +455,7 @@ def finalize_window(window_id: int, *, now: datetime | None = None) -> dict:
     `finalization_deadline`. Pass `now` explicitly (business-zone aware) for
     deterministic tests; it defaults to the current wall clock.
     """
+    from app.services.ingestion import ingest_pending_files
     from app.services.window_report import build_report, freeze_report
 
     window = db.get_window(window_id)
@@ -474,7 +475,11 @@ def finalize_window(window_id: int, *, now: datetime | None = None) -> dict:
             f"Cannot finalize Campaign Window #{window_id}: the finalization deadline "
             f"({deadline.isoformat()}) has passed."
         )
-    report = build_report(window_id, ingest=True)
+    # Finalization is the explicit ingestion point that closes the window: sync
+    # grace-period uploads into the durable fact tables, then compute the report
+    # from persisted facts alone (the report read path never ingests).
+    ingest_pending_files()
+    report = build_report(window_id)
     window = db.finalize_window_transition(window_id, dates.to_utc_iso(instant))
     report["window"].update(
         {"status": window["status"], "finalized_at": window["finalized_at"]}

@@ -27,8 +27,8 @@ from pathlib import Path
 import pandas as pd
 
 from app.core.config import settings
-from app.db.files import login_file_processed, mark_logins_ingested
 from app.db.logins import insert_login_records
+from app.services.ingestion import ingest_claimed_file
 
 LOGIN_COLUMNS = ("userId", "timestamp")
 
@@ -124,10 +124,8 @@ def parse_logins_frame(source_file: str, df: pd.DataFrame) -> dict:
     }
 
 
-def ingest_login_file(path: Path) -> dict:
-    """Ingest one Login CSV into logins. Returns a per-file report."""
-    name = Path(path).name
-    report = {
+def _empty_login_report(name: str) -> dict:
+    return {
         "source_file": name,
         "discovered": 0,
         "inserted": 0,
@@ -136,11 +134,15 @@ def ingest_login_file(path: Path) -> dict:
         "parse_errors": 0,
         "invalid_reasons": {},
     }
+
+
+def _ingest_login_file(path: Path, name: str) -> dict:
+    """Read + persist one Login CSV (caller already holds the claim)."""
+    report = _empty_login_report(name)
     try:
         df = pd.read_csv(
             path,
             dtype={"userId": str, "timestamp": str},
-            engine="python",
         )
     except Exception as exc:
         report["parse_errors"] = 1
@@ -156,17 +158,34 @@ def ingest_login_file(path: Path) -> dict:
         report["inserted"] = insert_login_records(parsed["records"])
         report["skipped"] = len(parsed["records"]) - report["inserted"]
     report["skipped"] += parsed["invalid_reasons"].get("duplicate_row", 0)
+    return report
 
-    mark_logins_ingested(name, report)
+
+def ingest_login_file(path: Path) -> dict:
+    """Ingest one Login CSV into logins under a single-flight claim.
+
+    Returns a per-file report; when another caller owns the file or it has
+    already been processed, `claimed` is False and the report is an empty stub.
+    """
+    name = Path(path).name
+    claimed, report = ingest_claimed_file(
+        "Login", name, lambda: _ingest_login_file(path, name)
+    )
+    if not claimed:
+        stub = _empty_login_report(name)
+        stub["claimed"] = False
+        return stub
+    report["claimed"] = True
     return report
 
 
 def ingest_new_login_files() -> dict:
-    """Ingest Login files not yet marked processed (historical + incremental).
+    """Ingest Login files not yet processed (historical + incremental).
 
     Files are processed oldest-first by name so overlapping point-in-time
     exports replay their rows in order and the logins table converges without
-    operator intervention. Repeated calls only ever touch new files.
+    operator intervention. Each file is claimed exactly once; repeated calls
+    only ever touch new files.
     """
     files = sorted(glob.glob(str(settings.DATA_FOLDER / settings.LOGIN_FILE_PATTERN)))
     totals = {
@@ -178,15 +197,14 @@ def ingest_new_login_files() -> dict:
         "parse_errors": 0,
     }
     for f in files:
-        name = Path(f).name
-        if login_file_processed(name):
+        report = ingest_login_file(Path(f))
+        if not report.get("claimed"):
             continue
         totals["files"] += 1
-        report = ingest_login_file(Path(f))
         for key in ("discovered", "inserted", "skipped", "invalid", "parse_errors"):
             totals[key] += report[key]
         print(
-            f"Logins ingest {name}: discovered={report['discovered']} "
+            f"Logins ingest {report['source_file']}: discovered={report['discovered']} "
             f"inserted={report['inserted']} skipped={report['skipped']} "
             f"invalid={report['invalid']} parse_errors={report['parse_errors']} "
             f"reasons={report['invalid_reasons']}"

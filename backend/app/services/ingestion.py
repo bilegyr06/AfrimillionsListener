@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import glob
 import io
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 
@@ -159,3 +161,87 @@ def persist_upload(filename: str, content: bytes, uploaded_by: str | None = None
 
 def _registry_record(**kwargs) -> dict:
     return {k: v for k, v in kwargs.items()}
+
+
+# ---------------------------------------------------------------------------
+# Single-flight source-file ingestion
+# ---------------------------------------------------------------------------
+#
+# Ingestion is a WRITE that belongs to explicit operational points (a manual
+# upload, a Run start, a Window finalization) - never to a report READ. Two
+# mechanisms protect a source file from being parsed by concurrent callers:
+#
+#   * the ledger claim (app.db.files.claim_file_for_ingestion) is the atomic,
+#     SQLite-backed single-flight: a BEGIN IMMEDIATE compare-and-swap ensures
+#     only one caller can move a file into 'processing';
+#   * a per-file in-process lock makes a second caller in this single-process
+#     backend wait for the in-flight ingest to finish, then see the file as
+#     already processed (so it never reads half-ingested facts).
+#
+# Together they replace the racy "is_processed() -> parse -> mark_processed()"
+# sequence, which let concurrent callers all observe the file as unprocessed.
+
+_ingest_locks: dict[tuple[str, str], threading.Lock] = {}
+_ingest_locks_guard = threading.Lock()
+
+
+def _file_ingest_lock(dataset: str, stored_filename: str) -> threading.Lock:
+    key = (dataset, stored_filename)
+    with _ingest_locks_guard:
+        lock = _ingest_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _ingest_locks[key] = lock
+        return lock
+
+
+def ingest_claimed_file(
+    dataset: str, stored_filename: str, ingest: Callable[[], dict]
+) -> tuple[bool, dict | None]:
+    """Ingest one persisted source file exactly once across concurrent callers.
+
+    `ingest` performs the dataset-specific read+persist and returns a report
+    containing at least ``parse_errors``. On success the ledger is marked
+    'processed'; a read failure releases the claim as 'failed' so the file is
+    retried rather than falsely recorded as ingested. Returns
+    ``(claimed, report)``; ``claimed`` is False when another caller owns the
+    file or it has already been processed.
+    """
+    from app.db import files as files_db
+
+    lock = _file_ingest_lock(dataset, stored_filename)
+    with lock:
+        if not files_db.claim_file_for_ingestion(dataset, stored_filename):
+            return False, None
+
+        try:
+            report = ingest()
+        except Exception as exc:
+            files_db.release_file_claim(dataset, stored_filename, error=str(exc))
+            raise
+
+        if report.get("parse_errors"):
+            reason = report.get("invalid_reasons", {}).get("read_failed", "parse failed")
+            files_db.release_file_claim(dataset, stored_filename, error=str(reason))
+        else:
+            files_db.mark_ingested(dataset, stored_filename, report)
+        return True, report
+
+
+def ingest_pending_files() -> dict:
+    """Sync the durable fact tables with every not-yet-processed source file.
+
+    The explicit "ingest all pending Sales/Deposit/Login files" operation, run
+    from operational lifecycle points (Window finalization) and never from a
+    report read. Each dataset's own incremental pass is idempotent and
+    single-flight.
+    """
+    from app.services.deposits import ingest_new_deposit_files
+    from app.services.logins import ingest_new_login_files
+    from app.services.plays import ingest_new_sales_files
+
+    return {
+        "sales": ingest_new_sales_files(),
+        "deposits": ingest_new_deposit_files(),
+        "logins": ingest_new_login_files(),
+    }
