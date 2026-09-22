@@ -72,6 +72,18 @@ SEGMENT_LABELS: dict[str, str] = {
 SEGMENT_CATALOG_DEFAULT = "unsegmented"
 
 
+def segment_label(segment_id: str) -> str:
+    """The human-readable label for any persisted segment id.
+
+    The `unsegmented` fallback segment resolves to "Unsegmented"; defined
+    segments use the report labels above. Unknown identifiers are echoed
+    verbatim so persisted data always renders.
+    """
+    if segment_id == SEGMENT_CATALOG_DEFAULT:
+        return "Unsegmented"
+    return SEGMENT_LABELS.get(segment_id, segment_id)
+
+
 def list_segments() -> list[dict]:
     """The operator-facing segment catalog for Window configuration.
 
@@ -81,11 +93,11 @@ def list_segments() -> list[dict]:
     """
     default = {
         "id": SEGMENT_CATALOG_DEFAULT,
-        "label": "Unsegmented",
+        "label": segment_label(SEGMENT_CATALOG_DEFAULT),
         "default": True,
     }
     defined = [
-        {"id": seg_id, "label": SEGMENT_LABELS.get(seg_id, seg_id), "default": False}
+        {"id": seg_id, "label": segment_label(seg_id), "default": False}
         for seg_id in SEGMENT_IDS
     ]
     return [default, *defined]
@@ -439,6 +451,7 @@ __all__ = [
     "last_sunday",
     "midnight",
     "onboarding_start",
+    "segment_label",
     "segment_week_bounds",
     "today_start",
     "value_tier",

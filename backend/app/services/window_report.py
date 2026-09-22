@@ -38,6 +38,7 @@ from app.core.dates import BUSINESS_TIMEZONE
 from app.db import windows as db
 from app.db import window_report as wr
 from app.db.window_report import ACCEPTED_SMS_STATUSES, REPORT_SCHEMA_VERSION
+from app.services import segments
 
 RATE_NONE = None  # rate/unit metric with a zero denominator (never 0.0)
 
@@ -312,28 +313,31 @@ def _game_stats(user_ids: set[str], plays: list[dict]) -> list[dict]:
     return rows
 
 
-def build_report(window_id: int) -> dict:
-    """Compute the Window report purely from already-persisted facts.
+def load_window_facts(window: dict, campaign_ids: set[str]) -> dict:
+    """Shared persisted-fact load for the Window report and the export.
 
-    Reading a report never scans or ingests source files; callers that need new
-    uploads reflected must ingest them first at an operational point via
-    app.services.ingestion.ingest_pending_files.
+    Loads everything the report derives from durable state exactly once:
+
+      * window evaluation bounds in the relabelled Lagos fact frame and the raw
+        UTC window boundary instants;
+      * the window's phone-valid audience plays, deposits and logins whose
+        source labels fall inside the period (decoded to Lagos-aware datetimes);
+      * the window's Runs and their accepted Welcome interventions inside the
+        period (the Campaign attribution model input);
+      * the per-user play index and the Window-level attribution projection.
+
+    Pure read: like build_report, this never scans or ingests source files and
+    never writes. Sharing it between build_report and segment_evaluations keeps
+    the segment export on exactly the same persisted fact base as the Window
+    report instead of a second, drifting calculation path.
     """
-    window = db.get_window(window_id)
-    if window is None:
-        raise db.WindowStateError(f"Campaign Window #{window_id} not found.")
-
     low, high = _fact_boundaries(window)
     low_utc = window["start_time"]
     high_utc = window["end_time"]
 
-    audience = _audience_map(window_id)
-    campaign_ids = {uid for uid, a in audience.items() if a == "campaign"}
-    control_ids = {uid for uid, a in audience.items() if a == "control"}
-
-    plays = wr.select_window_plays(window_id, low, high)
-    deposits = wr.select_window_deposits(window_id, low, high)
-    logins = wr.select_window_logins(window_id, low, high)
+    plays = wr.select_window_plays(window["id"], low, high)
+    deposits = wr.select_window_deposits(window["id"], low, high)
+    logins = wr.select_window_logins(window["id"], low, high)
 
     for p in plays:
         p["dt"] = dates.read_source_fact(p["played_at"])
@@ -342,7 +346,7 @@ def build_report(window_id: int) -> dict:
     for l in logins:
         l["dt"] = dates.read_source_fact(l["logged_at"])
 
-    runs = db.list_runs(window_id)
+    runs = db.list_runs(window["id"])
     run_ids = [r["id"] for r in runs]
     run_sms = wr.select_run_welcome_sms(run_ids)
     accepted = _in_window_period(
@@ -359,7 +363,54 @@ def build_report(window_id: int) -> dict:
         plays_by_user.setdefault(p["user_id"], []).append(p)
 
     attribution = _attribution(campaign_ids, plays, accepted)
-    runs_by_id = {r["id"]: r for r in runs}
+
+    period_start_lagos = dates.as_business(dates.parse_utc_iso(window["start_time"]))
+    period_end_lagos = dates.as_business(dates.parse_utc_iso(window["end_time"]))
+
+    return {
+        "low": low,
+        "high": high,
+        "low_utc": low_utc,
+        "high_utc": high_utc,
+        "plays": plays,
+        "deposits": deposits,
+        "logins": logins,
+        "runs": runs,
+        "run_sms": run_sms,
+        "accepted": accepted,
+        "plays_by_user": plays_by_user,
+        "attribution": attribution,
+        "period_start_lagos": period_start_lagos,
+        "period_end_lagos": period_end_lagos,
+    }
+
+
+def build_report(window_id: int) -> dict:
+    """Compute the Window report purely from already-persisted facts.
+
+    Reading a report never scans or ingests source files; callers that need new
+    uploads reflected must ingest them first at an operational point via
+    app.services.ingestion.ingest_pending_files.
+    """
+    window = db.get_window(window_id)
+    if window is None:
+        raise db.WindowStateError(f"Campaign Window #{window_id} not found.")
+
+    audience = _audience_map(window_id)
+    campaign_ids = {uid for uid, a in audience.items() if a == "campaign"}
+    control_ids = {uid for uid, a in audience.items() if a == "control"}
+
+    facts = load_window_facts(window, campaign_ids)
+    low, high = facts["low"], facts["high"]
+    low_utc, high_utc = facts["low_utc"], facts["high_utc"]
+    plays = facts["plays"]
+    deposits = facts["deposits"]
+    logins = facts["logins"]
+    runs = facts["runs"]
+    run_sms = facts["run_sms"]
+    accepted = facts["accepted"]
+    plays_by_user = facts["plays_by_user"]
+    attribution = facts["attribution"]
 
     # Per-run summary (attribution context for the full window).
     run_summaries: list[dict] = []
@@ -402,8 +453,8 @@ def build_report(window_id: int) -> dict:
         "control", control_ids, plays, deposits, logins, attribution, plays_by_user
     )
 
-    period_start_lagos = dates.as_business(dates.parse_utc_iso(window["start_time"]))
-    period_end_lagos = dates.as_business(dates.parse_utc_iso(window["end_time"]))
+    period_start_lagos = facts["period_start_lagos"]
+    period_end_lagos = facts["period_end_lagos"]
 
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -497,3 +548,139 @@ def get_report(window_id: int) -> dict:
         return report
 
     return build_report(window_id)
+
+
+def _segment_order(segment_id: str) -> tuple[int, str]:
+    """Deterministic block order: default/unsegmented first, then the source
+    build order of the defined segments, then any unknown ids alphabetically.
+    """
+    if segment_id == segments.SEGMENT_CATALOG_DEFAULT:
+        return (0, segment_id)
+    if segment_id in segments.SEGMENT_IDS:
+        return (1 + segments.SEGMENT_IDS.index(segment_id), segment_id)
+    return (len(segments.SEGMENT_IDS) + 1, segment_id)
+
+
+def segment_evaluations(window_id: int) -> dict:
+    """Segment-scoped evaluation blocks for the Window Excel export.
+
+    One evaluation per distinct segment held by the Window's phone-valid
+    audience (the authoritative `window_audiences.segment_id` membership), each
+    with Campaign and Control group metrics. A Window with no phone-valid
+    audience yet still evaluates its structural "Unsegmented" block (0 counts,
+    "+--" rates) so the export workbook is never blank.
+
+    The metrics come from the exact same `_group_metrics` engine (and the same
+    `load_window_facts` persisted fact base) the Window report uses, but scoped
+    to the segment's members and split by their persisted assignment. Segment
+    membership and Campaign/Control assignment are read, never inferred or
+    recomputed. A segment selected by several Runs appears once: the per-segment
+    membership is a set of user ids, so repeats never double-count a user and
+    distinct segments never merge.
+
+    Window-level values (name, control percentage, evaluation period) are read
+    from the immutable Window row or its frozen `window_reports` snapshot when
+    one exists, so finalized Windows keep their frozen window-level semantics.
+    Pure read: never ingests source files and never mutates state.
+    """
+    window = db.get_window(window_id)
+    if window is None:
+        raise db.WindowStateError(f"Campaign Window #{window_id} not found.")
+
+    # Frozen snapshots are authoritative for the Window-level block header of
+    # finalized windows; read without the build report so the export is
+    # strictly read-only even in the "finalized without a snapshot" edge case.
+    frozen = wr.get_frozen_report(window_id) if window["status"] == "finalized" else None
+    if frozen and frozen.get("schema_version") == REPORT_SCHEMA_VERSION:
+        window_name = frozen["window"].get("name")
+        control_percentage = frozen["window"].get("control_percentage")
+        period = frozen["evaluation_period"]
+        period_start = dates.parse_utc_iso(period["start"])
+        period_end = dates.parse_utc_iso(period["end"])
+        fact_start = period.get("fact_start")
+        fact_end = period.get("fact_end")
+    else:
+        window_name = window.get("name")
+        control_percentage = window.get("control_percentage")
+        period_start = dates.parse_utc_iso(window["start_time"])
+        period_end = dates.parse_utc_iso(window["end_time"])
+        fact_start = None
+        fact_end = None
+
+    by_segment: dict[str, dict[str, set[str]]] = {}
+    for member in db.get_audience(window_id):
+        if not member["phone_valid"]:
+            continue
+        bucket = by_segment.setdefault(
+            member["segment_id"], {"campaign": set(), "control": set()}
+        )
+        bucket[str(member["assignment"])].add(str(member["user_id"]))
+
+    if not by_segment:
+        # A window is appraised as soon as it exists, before any phone-valid
+        # audience is built. Rather than a blank workbook, the export still gets
+        # its structural "Unsegmented" block: empty memberships evaluate to 0
+        # counts and "+--" (unavailable) rates, so the file is never empty.
+        by_segment[segments.SEGMENT_CATALOG_DEFAULT] = {
+            "campaign": set(),
+            "control": set(),
+        }
+
+    campaign_ids = {
+        uid for bucket in by_segment.values() for uid in bucket["campaign"]
+    }
+    facts = load_window_facts(window, campaign_ids)
+
+    blocks = []
+    for segment_id in sorted(by_segment, key=_segment_order):
+        bucket = by_segment[segment_id]
+        blocks.append(
+            {
+                "segment_id": segment_id,
+                "segment_label": segments.segment_label(segment_id),
+                "campaign": _group_metrics(
+                    "campaign",
+                    bucket["campaign"],
+                    facts["plays"],
+                    facts["deposits"],
+                    facts["logins"],
+                    facts["attribution"],
+                    facts["plays_by_user"],
+                ),
+                "control": _group_metrics(
+                    "control",
+                    bucket["control"],
+                    facts["plays"],
+                    facts["deposits"],
+                    facts["logins"],
+                    facts["attribution"],
+                    facts["plays_by_user"],
+                ),
+                "audience": {
+                    "campaign": len(bucket["campaign"]),
+                    "control": len(bucket["control"]),
+                },
+            }
+        )
+
+    if fact_start is None:
+        fact_start = facts["low"]
+    if fact_end is None:
+        fact_end = facts["high"]
+    return {
+        "window": {
+            "id": window["id"],
+            "name": window_name,
+            "status": window["status"],
+            "control_percentage": control_percentage,
+            "business_timezone": BUSINESS_TIMEZONE,
+        },
+        "evaluation_period": {
+            "start": dates.to_utc_iso(period_start),
+            "end": dates.to_utc_iso(period_end),
+            "timezone": BUSINESS_TIMEZONE,
+            "fact_start": fact_start,
+            "fact_end": fact_end,
+        },
+        "segments": blocks,
+    }

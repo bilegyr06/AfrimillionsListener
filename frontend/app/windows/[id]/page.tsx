@@ -9,6 +9,7 @@ import { Metric, MetricStrip, MetricTier } from "@/components/statistics/metric"
 import StatSection from "@/components/statistics/section";
 import CampaignAttribution from "@/components/windows/campaign-attribution";
 import ControlConfiguration from "@/components/windows/control-configuration";
+import ExportEvaluation from "@/components/windows/export-evaluation";
 import LifecycleControls from "@/components/windows/lifecycle-controls";
 import SnapshotCell from "@/components/windows/snapshot-cell";
 import SplitSection from "@/components/windows/split-section";
@@ -916,6 +917,7 @@ export default function WindowWorkspacePage() {
           </p>
         </div>
         <div className="actions">
+          <ExportEvaluation windowId={window.id} flash={setFlash} />
           <Link className="btn btn-secondary" href="/windows">
             Back to windows
           </Link>

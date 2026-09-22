@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from app.db.windows import WindowConfigError, WindowStateError
 from app.services import eligibility, execution, segments, windows as svc
+from app.services.window_export import XLSX_MEDIA_TYPE, build_evaluation_workbook
+
 
 router = APIRouter(tags=["campaign-windows"])
 
@@ -143,6 +145,29 @@ def window_report(window_id: int):
         return get_report(window_id)
     except WindowStateError as exc:
         raise _http(exc)
+
+
+@router.get("/windows/{window_id}/export")
+def export_window(window_id: int):
+    """Download the Window's segment-by-segment evaluation as an .xlsx workbook.
+
+    Read-only: calculates segment-scoped Campaign/Control metrics from the
+    persisted audience/assignment and activity facts (frozen semantics for
+    finalized Windows) and streams the workbook; never ingests files and never
+    mutates Window/Run/audience/report state.
+    """
+    
+    if svc.get_window(window_id) is None:
+        raise HTTPException(status_code=404, detail=f"Campaign Window #{window_id} not found.")
+    try:
+        filename, stream = build_evaluation_workbook(window_id)
+    except WindowStateError as exc:
+        raise _http(exc)
+    return Response(
+        content=stream.getvalue(),
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/windows/{window_id}/extend-end")

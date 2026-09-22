@@ -73,3 +73,33 @@ export async function apiPostForm<T>(path: string, formData: FormData): Promise<
   });
   return parse<T>(res);
 }
+
+// -- Downloads ----------------------------------------------------------------
+
+export interface DownloadResult {
+  filename: string;
+  blob: Blob;
+}
+
+// Extract the download filename from a Content-Disposition header
+// ("attachment; filename=\"name.xlsx\""). Backend-controlled filenames are
+// ASCII-safe, so a bare string capture is sufficient.
+export function filenameFromContentDisposition(value: string | null): string | null {
+  if (!value) return null;
+  const match = /filename="?([^"]+)"?/i.exec(value);
+  return match ? match[1] : null;
+}
+
+export async function apiDownload(path: string): Promise<DownloadResult> {
+  const res = await fetch(`/api${path}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, await readError(res));
+  }
+  const blob = await res.blob();
+  return {
+    filename: filenameFromContentDisposition(res.headers.get("content-disposition")) ?? "window-export.xlsx",
+    blob,
+  };
+}
