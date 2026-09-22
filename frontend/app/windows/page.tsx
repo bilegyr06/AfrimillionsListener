@@ -120,9 +120,14 @@ export default function WindowsPage() {
                     <td>
                       <SplitCell row={w} />
                     </td>
-                    <td className="small num">
-                      {formatNumber(w.runs_count)}
-                      {w.running_runs.length > 0 ? `${w.running_runs.length} running` : ""}
+                    <td className="small">
+                      <span className="num">{formatNumber(w.runs_count)}</span>
+                      {w.running_runs.length > 0 ? (
+                        <span className="muted">
+                          {", "}
+                          {formatNumber(w.running_runs.length)} running
+                        </span>
+                      ) : null}
                     </td>
                     <td className="small muted">{deadlineText}</td>
                   </tr>

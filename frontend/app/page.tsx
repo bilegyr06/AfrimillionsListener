@@ -86,7 +86,7 @@ function ActiveWindowSection({
       <div className="section">
         {header}
         <div className="section-body">
-          <span className="muted" style={{ fontSize: 13 }}>
+          <span className="muted small">
             No active campaign window right now.
           </span>
         </div>
@@ -108,10 +108,10 @@ function ActiveWindowSection({
               : "No audience yet";
           return (
             <div key={w.id}>
-              <div className="stat-strip" style={{ border: "none", borderRadius: 0 }}>
+              <div className="stat-strip flush">
                 <div className="stat">
                   <div className="label">Window</div>
-                  <div className="value" style={{ fontSize: 16 }}>
+                  <div className="value value-md">
                     <Link className="table-link" href={`/windows/${w.id}`}>
                       {windowDisplayName(w.name, w.id)}
                     </Link>
@@ -123,7 +123,7 @@ function ActiveWindowSection({
                 </div>
                 <div className="stat">
                   <div className="label">Period</div>
-                  <div className="value" style={{ fontSize: 16 }}>
+                  <div className="value value-md">
                     {formatDate(w.start_time)}
                     {"→"}
                     {formatDate(w.end_time)}
@@ -132,7 +132,7 @@ function ActiveWindowSection({
                 </div>
                 <div className="stat">
                   <div className="label">Eligible (N)</div>
-                  <div className="value" style={{ fontSize: 16 }}>
+                  <div className="value value-md">
                     {formatNumber(w.eligible_count)}
                   </div>
                   <div className="sub">
@@ -141,12 +141,14 @@ function ActiveWindowSection({
                 </div>
                 <div className="stat">
                   <div className="label">Campaign / Control</div>
-                  <div className="value" style={{ fontSize: 16 }}>
+                  <div className="value value-md">
                     {splitText}
                   </div>
                   <div className="sub">
                     {formatNumber(w.runs_count)} runs
-                    {w.running_runs.length > 0 ? `${formatNumber(w.running_runs.length)} running` : ""}
+                    {w.running_runs.length > 0
+                      ? `, ${formatNumber(w.running_runs.length)} running`
+                      : ""}
                   </div>
                 </div>
               </div>
