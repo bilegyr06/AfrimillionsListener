@@ -96,7 +96,7 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
               value: formatNumber(r.audience.not_sent_to[key]),
             }))}
           />
-          <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
+          <p className="hint" style={{ margin: "10px 20px 0" }}>
             The funnel moves from login events to distinct customers, then to
             accepted SMS sends, delivery outcomes, and finally to converted
             customers. A customer can appear in more than one stage, so the
@@ -181,10 +181,10 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
               { label: "Average amount per contacted customer", value: formatMoney(r.activity.avg_amount_per_contacted) },
             ]}
           />
-          <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
-            A qualifying play lies strictly after the customer\u2019s first Welcome
+          <p className="hint" style={{ margin: "10px 20px 0" }}>
+            A qualifying play lies strictly after the customer’s first Welcome
             SMS and at or before the attribution window end. Plays before the SMS
-            would have disqualified that customer\u2019s send, so they are listed
+            would have disqualified that customer’s send, so they are listed
             separately above.
           </p>
         </div>
@@ -220,7 +220,7 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
           )}
         </div>
         <div className="section-body" style={{ paddingTop: 0 }}>
-          <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
+          <p className="hint" style={{ margin: "10px 20px 0" }}>
             Ranked by plays, then by play amount. Customers of a game are the
             distinct players who qualify in the window, not unique to one game.
           </p>
@@ -254,7 +254,10 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
               },
               {
                 label: "Awaiting delivery",
-                value: `${formatNumber(r.sms.sent_awaiting_delivery)}${r.sms.unmatched > 0 ? `${formatNumber(r.sms.unmatched)} unmatched to delivery log` : ""}`,
+                value:
+                  r.sms.unmatched > 0
+                    ? `${formatNumber(r.sms.sent_awaiting_delivery)} (${formatNumber(r.sms.unmatched)} unmatched to delivery log)`
+                    : formatNumber(r.sms.sent_awaiting_delivery),
               },
               {
                 label: "Avg cost per accepted SMS",
@@ -262,7 +265,7 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
               },
             ]}
           />
-          <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
+          <p className="hint" style={{ margin: "10px 20px 0" }}>
             Deferred means the send was accepted but no provider call was made;
             those sends never produce a delivery confirmation.
           </p>
@@ -282,11 +285,11 @@ export default function CampaignReport({ detail }: { detail: CampaignStatisticsD
               { label: "Activity / cost ratio", value: formatRatio(r.economics.activity_cost_ratio) },
             ]}
           />
-          <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
-            SMS cost covers this campaign\u2019s own accepted Welcome SMS. A
-            \u201c\u2014\u201d on a per-customer row means there is no customer column to
+          <p className="hint" style={{ margin: "10px 20px 0" }}>
+            SMS cost covers this campaign’s own accepted Welcome SMS. A
+            “—” on a per-customer row means there is no customer column to
             divide over, not a zero cost. Attributed play amount is the qualifying
-            plays inside the attribution window \u2014 it is not revenue, and the
+            plays inside the attribution window — it is not revenue, and the
             activity/cost ratio is a descriptive ratio of available data, not ROI.
           </p>
         </div>

@@ -45,7 +45,7 @@ function Control({ setting, value, onChange }: { setting: SettingRow; value: str
       return (
         <label className="field-inline field" style={{ margin: 0, minHeight: 38, justifyContent: "flex-start" }}>
           <input type="checkbox" checked={value === "true"} onChange={(e) => onChange(e.target.checked ? "true" : "false")} />
-          <span style={{ fontSize: 13.5 }}>{value === "true" ? "Enabled" : "Disabled"}</span>
+          <span>{value === "true" ? "Enabled" : "Disabled"}</span>
         </label>
       );
     case "time":
@@ -150,7 +150,7 @@ export default function SettingsPage() {
             <div className="section-head">
               <div>
                 <h2>{group.label}</h2>
-                <p className="muted" style={{ margin: "2px 0 0", fontSize: 12.5 }}>
+                <p className="hint" style={{ margin: "2px 0 0" }}>
                   {group.hint}
                 </p>
               </div>
@@ -163,7 +163,7 @@ export default function SettingsPage() {
                   <div className="setting-row" key={setting.key}>
                     <div className="setting-info">
                       <div className="setting-label">{setting.label}</div>
-                      <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>
+                      <div className="hint" style={{ marginTop: 2 }}>
                         {setting.description}
                       </div>
                     </div>

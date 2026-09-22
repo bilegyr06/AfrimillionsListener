@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { Loading } from "@/components/state-ui";
 
 export default function CampaignsPage() {
   const router = useRouter();
@@ -20,7 +21,7 @@ export default function CampaignsPage() {
           <p className="muted" style={{ marginBottom: 12 }}>
             Campaign Runs are now managed within Campaign Windows. Redirecting to Campaign Windows...
           </p>
-          <div>Loading...</div>
+          <Loading text="Redirecting to Campaign Windows..." />
         </div>
       </div>
     </div>

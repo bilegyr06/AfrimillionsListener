@@ -75,7 +75,7 @@ export default function CampaignStatisticsPage() {
             <h1>{campaignDisplayName(campaign.name, campaign.id)}</h1>
             <StatusPill {...status} />
           </div>
-          <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>
+          <p className="hint" style={{ margin: "4px 0 0" }}>
             {stats.data.window.description}
           </p>
         </div>

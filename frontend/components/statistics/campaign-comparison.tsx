@@ -131,9 +131,9 @@ export function CampaignComparison({ ids, onClose }: Props) {
               ))}
             </tbody>
           </table>
-          <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
-            Comparison is descriptive only \u2014 there is no automatic ranking.
-            Attributed play amount is qualifying plays inside each campaign\u2019s
+          <p className="hint" style={{ margin: "10px 20px 0" }}>
+            Comparison is descriptive only — there is no automatic ranking.
+            Attributed play amount is qualifying plays inside each campaign’s
             attribution window; the activity/cost ratio is not ROI.
           </p>
         </div>

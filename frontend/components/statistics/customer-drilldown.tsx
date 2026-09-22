@@ -117,10 +117,10 @@ export function CustomerDrilldown({ campaignId }: { campaignId: number }) {
             </tbody>
           </table>
           <Pager page={customers.data.page} pages={customers.data.pages} onChange={setPage} />
-          <p className="muted" style={{ margin: "10px 20px 0", fontSize: 12.5 }}>
-            Qualifying plays, attributed amount, and games are each customer\u2019s
+          <p className="hint" style={{ margin: "10px 20px 0" }}>
+            Qualifying plays, attributed amount, and games are each customer’s
             activity inside the campaign attribution window; a customer is
-            \u201cConverted\u201d on their first qualifying play after the Welcome SMS.
+            “Converted” on their first qualifying play after the Welcome SMS.
           </p>
         </div>
       )}

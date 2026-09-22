@@ -19,7 +19,7 @@ export default function CampaignPerformance({ stats, showPending = false }: Camp
   return (
     <>
       <div className="section-body flush" style={{ paddingBottom: 0 }}>
-        <div className="stat-strip" style={{ border: "none", borderRadius: 0 }}>
+        <div className="stat-strip flush">
           <Metric label="Customers targeted" value={formatNumber(stats.opportunities.total)} />
           <Metric label="SMS sent" value={formatNumber(stats.interventions.total)} />
           <Metric label="SMS failed" value={formatNumber(stats.opportunities.failed_send ?? 0)} />
@@ -38,7 +38,7 @@ export default function CampaignPerformance({ stats, showPending = false }: Camp
       </div>
       {showPending && (
         <div className="section-body" style={{ paddingTop: 12 }}>
-          <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+          <p className="hint" style={{ margin: 0 }}>
             {pending > 0
               ? `${formatNumber(pending)} targeted customers still pending evaluation.`
               : "All targeted customers have been evaluated."}

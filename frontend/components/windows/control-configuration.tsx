@@ -79,10 +79,8 @@ export default function ControlConfiguration({ window, onChanged, flash }: Props
               </span>
             </div>
           ) : (
-            <div
-              style={{ padding: 12, background: "rgba(0,0,0,0.03)", borderRadius: 6, border: "1px solid rgba(0,0,0,0.06)" }}
-            >
-              <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+            <div className="callout">
+              <p className="hint" style={{ margin: 0 }}>
                 <strong>Configuration locked</strong> — the Control percentage can no longer be
                 changed for this window. No percentage was established before the configuration
                 locked.
@@ -118,7 +116,7 @@ export default function ControlConfiguration({ window, onChanged, flash }: Props
             </div>
           </div>
         )}
-        <p className="muted" style={{ margin: "12px 0 0", fontSize: 12.5 }}>
+        <p className="hint" style={{ margin: "12px 0 0" }}>
           The eligible count (N) is derived by the evaluation step from the window&apos;s rules and the
           available source data. It is not set manually.
         </p>

@@ -39,7 +39,7 @@ export default function SnapshotCell({ capturedAt, files }: Props) {
           </tbody>
         </table>
       ) : null}
-      <p className="muted" style={{ margin: "6px 0 0", fontSize: 12.5 }}>
+      <p className="hint" style={{ margin: "6px 0 0" }}>
         This run uses a snapshot of the data available at start. Later uploads do not change this
         run&apos;s target.
       </p>

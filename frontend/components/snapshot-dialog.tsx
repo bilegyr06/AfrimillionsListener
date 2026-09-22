@@ -93,7 +93,7 @@ export default function SnapshotDialog({ open, title, text, filename, onClose }:
     >
       <div className="dialog-head">
         <h2>{title}</h2>
-        <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>
+        <p className="hint" style={{ margin: "4px 0 0" }}>
           Copy or download for your reports.
         </p>
       </div>

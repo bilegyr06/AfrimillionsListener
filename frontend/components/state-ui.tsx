@@ -24,7 +24,7 @@ export function ErrorBlock({
     <div className="error-block">
       <p>{message}</p>
       {onRetry && (
-        <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={onRetry}>
+        <button className="btn btn-secondary btn-sm" onClick={onRetry}>
           Try again
         </button>
       )}

@@ -70,7 +70,7 @@ export default function LifecycleControls({
       {status === "active" && (
         <>
           <div style={{ flex: "1 1 260px" }}>
-            <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+            <p className="hint" style={{ margin: 0 }}>
               End the window to stop all active runs and enter the grace period. Configuration and the
               audience stay fixed from that moment on.
             </p>
@@ -84,7 +84,7 @@ export default function LifecycleControls({
       {status === "ended" && (
         <>
           <div style={{ flex: "1 1 260px" }}>
-            <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+            <p className="hint" style={{ margin: 0 }}>
               {beforeEnd
                 ? `Window ended early. It stays in grace until the scheduled end ${formatDateTime(
                     endTime,
@@ -111,7 +111,7 @@ export default function LifecycleControls({
       )}
 
       {status === "finalized" && (
-        <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+        <p className="hint" style={{ margin: 0 }}>
           This window was finalized on {finalizedAt ? formatDateTime(finalizedAt) : "an earlier date"} and is
           immutable.
         </p>

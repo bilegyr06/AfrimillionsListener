@@ -88,17 +88,17 @@ export default function DataPage() {
           <h2>Automatic collection</h2>
         </div>
         <div className="section-body flush" style={{ paddingBottom: 0 }}>
-          <div className="stat-strip" style={{ border: "none", borderRadius: 0 }}>
+          <div className="stat-strip flush">
             <div className="stat">
               <div className="label">Features in use</div>
-              <div className="value" style={{ fontSize: 16, paddingTop: 4 }}>
+              <div className="value value-md">
                 {features.length > 0 ? features.map((f) => featureLabels[f] ?? f).join(", ") : "None"}
               </div>
               <div className="sub">Sent automatically after sign-ins / inactivity</div>
             </div>
             <div className="stat">
               <div className="label">Scraper downloader</div>
-              <div className="value" style={{ fontSize: 16, paddingTop: 4 }}>
+              <div className="value value-md">
                 {scraperEnabled ? "On" : "Off"}
               </div>
               <div className="sub">CSVs downloaded from ALOT BI automatically</div>
@@ -106,7 +106,7 @@ export default function DataPage() {
           </div>
         </div>
         <div className="section-body" style={{ paddingTop: 12 }}>
-          <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+          <p className="hint" style={{ margin: 0 }}>
             Automatic collection pulls new numbers on its own schedule. Use the manual upload below to add numbers now.
           </p>
         </div>
@@ -142,7 +142,7 @@ export default function DataPage() {
               {uploading ? "Uploading..." : hasActiveRun ? "Upload blocked (Run active)" : "Upload CSVs"}
             </button>
           </div>
-          <p className="muted" style={{ margin: "10px 0 0", fontSize: 13 }}>
+          <p className="hint" style={{ margin: "10px 0 0" }}>
             Select one or more CSVs. They must have the same columns as the automated downloads. Parseable files
             join the matching dataset and are available to the next evaluation run; runs already started stay bound
             to their own frozen snapshots.
@@ -153,9 +153,9 @@ export default function DataPage() {
       <section className="section">
         <div className="section-head">
           <h2>Upload history</h2>
-          <span className="muted" style={{ fontSize: 12.5 }}>
+          <span className="hint">
             {files.data ? `${formatNumber(files.data.items.length)} shown` : "0"}
-            {failedCount > 0 ? `${failedCount} failed` : ""}
+            {failedCount > 0 ? ` · ${formatNumber(failedCount)} failed` : ""}
           </span>
         </div>
         <div className="section-body flush">
