@@ -143,6 +143,20 @@ class TestNoAutomaticTriggerOnDataChange:
 
 
 class TestExplicitTriggerRemainsFunctional:
+    def test_successful_trigger_returns_200_with_contract_body(
+        self, _init_db, _anytime_window, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        monkeypatch.setattr("app.routers.system.begin_cycle", lambda *a, **k: True)
+
+        with TestClient(app) as client:
+            r = client.post("/trigger")
+
+        assert r.status_code == 200
+        assert r.json() == {"message": "Notification cycle started."}
+
     def test_trigger_routes_still_invoke_begin_cycle(
         self, _init_db, _anytime_window, monkeypatch
     ):
@@ -164,12 +178,14 @@ class TestExplicitTriggerRemainsFunctional:
 
         assert calls == ["begin_cycle", "begin_cycle", "begin_cycle"]
 
-    def test_trigger_respects_window(self, _init_db, monkeypatch):
+    def test_blocked_outside_window_returns_409(
+        self, _init_db, _anytime_window, monkeypatch
+    ):
         from fastapi.testclient import TestClient
         from app.main import app
 
         monkeypatch.setattr(settings, "START_TIME", _time(12, 0))
-        monkeypatch.setattr(settings, "END_TIME", _time(12, 1))
+        monkeypatch.setattr(settings, "END_TIME", _time(12, 0))
 
         calls: list[str] = []
         monkeypatch.setattr(
@@ -178,5 +194,45 @@ class TestExplicitTriggerRemainsFunctional:
         )
 
         with TestClient(app) as client:
-            client.post("/trigger")
+            r = client.post("/trigger")
+
+        assert r.status_code == 409
+        assert r.json() == {
+            "message": "Notification cycle cannot begin outside the allowed time range."
+        }
+        assert calls == []
+
+    def test_blocked_while_cycle_running_returns_409(
+        self, _init_db, _anytime_window, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        monkeypatch.setattr("app.routers.system.begin_cycle", lambda *a, **k: False)
+
+        with TestClient(app) as client:
+            r = client.post("/trigger")
+
+        assert r.status_code == 409
+        assert r.json() == {"message": "A notification cycle is already running."}
+
+    def test_blocked_feature_not_enabled_returns_409(
+        self, _init_db, _anytime_window, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        monkeypatch.setattr(settings, "ENABLED_FEATURES", {"inactive"})
+
+        calls: list[str] = []
+        monkeypatch.setattr(
+            "app.routers.system.begin_cycle",
+            lambda *a, **k: calls.append("begin_cycle") or True,
+        )
+
+        with TestClient(app) as client:
+            r = client.post("/trigger/welcome")
+
+        assert r.status_code == 409
+        assert r.json() == {"message": "Requested feature is not enabled."}
         assert calls == []

@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
 from app.core import state
 from app.core.config import settings
@@ -39,20 +40,20 @@ def health():
 
 @router.post("/trigger")
 async def trigger():
-    message, status = _trigger()
-    return message, status
+    body, status = _trigger()
+    return JSONResponse(content=body, status_code=status)
 
 
 @router.post("/trigger/welcome")
 async def trigger_welcome():
-    message, status = _trigger({WELCOME})
-    return message, status
+    body, status = _trigger({WELCOME})
+    return JSONResponse(content=body, status_code=status)
 
 
 @router.post("/trigger/inactive")
 async def trigger_inactive():
-    message, status = _trigger({INACTIVE})
-    return message, status
+    body, status = _trigger({INACTIVE})
+    return JSONResponse(content=body, status_code=status)
 
 
 @router.get("/status")
