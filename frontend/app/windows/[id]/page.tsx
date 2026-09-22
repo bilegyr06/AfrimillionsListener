@@ -237,7 +237,7 @@ function RunsSection({
                 </span>
               </label>
             ))}
-            <span className="muted" style={{ fontSize: 12.5 }}>
+            <span className="hint">
               This run&apos;s eligibility is limited to its selected segments.
             </span>
           </div>
@@ -327,7 +327,7 @@ function RunsSection({
           </tbody>
         </table>
         <div className="section-body">
-          <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+          <p className="hint" style={{ margin: 0 }}>
             Runs use a snapshot of data at start. Later uploads do not affect the run's target.
           </p>
         </div>
@@ -381,7 +381,7 @@ function DataStateSection({ windowId, status }: { windowId: number; status: stri
             </tbody>
           </table>
           <div className="section-body">
-            <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+            <p className="hint" style={{ margin: 0 }}>
               Captured {formatDateTime(state.data.captured_at)}. Files shown here are available to a
               new run; existing runs stay bound to the snapshot they captured at start.
             </p>
@@ -390,8 +390,8 @@ function DataStateSection({ windowId, status }: { windowId: number; status: stri
       ) : null}
       {status === "finalized" && (
         <div className="section-body">
-          <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
-            Window finalized \u2014 the report is frozen and ignores everything uploaded after
+          <p className="hint" style={{ margin: 0 }}>
+            Window finalized — the report is frozen and ignores everything uploaded after
             finalization.
           </p>
         </div>
@@ -579,7 +579,7 @@ function ReportSection({ report }: { report: WindowReport }) {
           const games = report.games[kind];
           return (
             <div className="section-body flush" key={`games-${kind}`}>
-              <h3 style={{ margin: "0 20px 8px", fontSize: 13, textTransform: "capitalize" }}>
+              <h3 className="group-title">
                 {kind} group
               </h3>
               <table className="table">
@@ -631,6 +631,11 @@ function OverviewTab({ window, catalog, now }: { window: WindowDetail; catalog?:
     split.total_users > 0
       ? `${formatNumber(split.campaign_users)} / ${formatNumber(split.control_users)}`
       : "No audience yet";
+  const runningCount = window.runs.filter((r) => r.status === "running").length;
+  const runsMetricText =
+    runningCount > 0
+      ? `${formatNumber(window.runs.length)} (${formatNumber(runningCount)} running)`
+      : formatNumber(window.runs.length);
 
   return (
     <div>
@@ -684,7 +689,7 @@ function OverviewTab({ window, catalog, now }: { window: WindowDetail; catalog?:
           </MetricStrip>
           <MetricStrip>
             <Metric label="Campaign / Control" value={splitText} />
-            <Metric label="Runs" value={`${formatNumber(window.runs.length)}${window.runs.filter(r => r.status === "running").length > 0 ? `${formatNumber(window.runs.filter(r => r.status === "running").length)} running` : ""}`} />
+            <Metric label="Runs" value={runsMetricText} />
           </MetricStrip>
         </div>
       </StatSection>
@@ -770,7 +775,7 @@ function StatisticsTab({ report }: { report: WindowReport }) {
           const games = report.games[kind];
           return (
             <div className="section-body flush" key={`games-${kind}`}>
-              <h3 style={{ margin: "0 20px 8px", fontSize: 13, textTransform: "capitalize" }}>
+              <h3 className="group-title">
                 {kind} group
               </h3>
               <table className="table">
@@ -904,7 +909,7 @@ export default function WindowWorkspacePage() {
             <StatusPill {...status} />
             <StatusPill {...reportState} />
           </div>
-          <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>
+          <p className="hint" style={{ margin: "4px 0 0" }}>
             {formatDate(window.start_time)}
             {"\u2009\u2192\u2009"}
             {formatDate(window.end_time)}, {window.business_timezone}
@@ -945,12 +950,6 @@ export default function WindowWorkspacePage() {
           flash={setFlash}
         />
       </div>
-
-      {flash && (
-        <Notice kind={flash.kind} dismissMs={7000}>
-          {flash.text}
-        </Notice>
-      )}
 
       <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
 
