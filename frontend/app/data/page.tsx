@@ -6,7 +6,7 @@ import StatusPill from "@/components/status-pill";
 import { Empty, ErrorBlock, Loading } from "@/components/state-ui";
 import { apiGet, apiPostForm } from "@/lib/api";
 import { datasetLabel, fileStatusPresentation, formatDateTime, formatNumber } from "@/lib/format";
-import type { CampaignWindowRow, FilesResponse, ReportOverview, SettingsResponse, UploadResponse } from "@/lib/types";
+import type { CampaignWindowRow, FilesResponse, ReportOverview, UploadResponse } from "@/lib/types";
 import { useQuery } from "@/lib/use-query";
 
 function describeUpload(result: UploadResponse): string {
@@ -31,11 +31,9 @@ export default function DataPage() {
   const [notice, setNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   const files = useQuery<FilesResponse>(() => apiGet("/files"), [], 20000);
-  const settings = useQuery<SettingsResponse>(() => apiGet("/settings"), []);
   const overview = useQuery<ReportOverview>(() => apiGet("/report/overview"), [], 30000);
   const windows = useQuery<CampaignWindowRow[]>(() => apiGet("/windows"), [], 10000);
 
-  const scraperEnabled = settings.data?.items.find((s) => s.key === "CSV_DOWNLOADER_ENABLED")?.value === "true";
   const featureLabels: Record<string, string> = { welcome: "Welcome SMS", inactive: "Inactivity SMS" };
   // Active features come from the backend's scoped report, not from parsing
   // the ENABLED_FEATURES setting, so the UI can never drift from the scope.
@@ -85,7 +83,7 @@ export default function DataPage() {
 
       <section className="section">
         <div className="section-head">
-          <h2>Automatic collection</h2>
+          <h2>Campaign features</h2>
         </div>
         <div className="section-body flush" style={{ paddingBottom: 0 }}>
           <div className="stat-strip flush">
@@ -94,20 +92,13 @@ export default function DataPage() {
               <div className="value value-md">
                 {features.length > 0 ? features.map((f) => featureLabels[f] ?? f).join(", ") : "None"}
               </div>
-              <div className="sub">Sent automatically after sign-ins / inactivity</div>
-            </div>
-            <div className="stat">
-              <div className="label">Scraper downloader</div>
-              <div className="value value-md">
-                {scraperEnabled ? "On" : "Off"}
-              </div>
-              <div className="sub">CSVs downloaded from ALOT BI automatically</div>
+              <div className="sub">Sent when an operator starts a notification cycle</div>
             </div>
           </div>
         </div>
         <div className="section-body" style={{ paddingTop: 12 }}>
           <p className="hint" style={{ margin: 0 }}>
-            Automatic collection pulls new numbers on its own schedule. Use the manual upload below to add numbers now.
+            Cycles are started by an operator. Use the manual upload below to add numbers now.
           </p>
         </div>
       </section>

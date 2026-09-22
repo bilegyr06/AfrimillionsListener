@@ -1,5 +1,4 @@
 import asyncio
-import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -14,7 +13,6 @@ from app.routers import campaigns, reporting, sms, stats, system, uploads
 from app.routers import settings as settings_router
 from app.routers import windows as windows_router
 from app.services.settings import apply_persisted_settings
-from app.workers.watcher import start_watcher
 
 
 @asynccontextmanager
@@ -23,10 +21,6 @@ async def lifespan(app: FastAPI):
     seed_settings_from_db()
     apply_persisted_settings()
     set_default_gateway(TermiiGateway())
-    state.loop = asyncio.get_running_loop()
-
-    watcher_thread = threading.Thread(target=start_watcher, daemon=True)
-    watcher_thread.start()
 
     print("Afrimillions listener started.")
     print(f"  Enabled features: {', '.join(sorted(settings.ENABLED_FEATURES)) or 'none'}")

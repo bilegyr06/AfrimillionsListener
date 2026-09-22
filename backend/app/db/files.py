@@ -158,7 +158,7 @@ def claim_file_for_ingestion(dataset: str, stored_filename: str) -> bool:
     ``BEGIN IMMEDIATE`` transaction. SQLite's write lock serializes competing
     callers, so exactly one of them can move a file into 'processing'; any other
     caller sees 'processing'/'processed' and is refused. When no ledger row
-    exists yet (a file the auto-downloader dropped in the data folder), one is
+    exists yet (a file placed directly in the data folder), one is
     created as 'processing' in the same transaction, so the claim is race-free
     with or without a pre-existing row.
 

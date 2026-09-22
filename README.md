@@ -1,6 +1,6 @@
 # Afrimillions Listener
 
-A FastAPI service that watches the `data/` folder for CSV updates, finds users who haven't logged in for the last 48 hours, and sends them an SMS via [Termii](https://termii.com).
+A FastAPI service that ingests CSV data into the `data/` folder, finds users who haven't logged in for the last 48 hours, and sends them an SMS via [Termii](https://termii.com). Notification cycles are always operator-initiated (via `/trigger*` or the v2 Campaign Run dispatch flow) — file changes alone never trigger sends.
 
 ## Setup
 
@@ -20,7 +20,6 @@ MAX_MESSAGES=0           # 0 = unlimited
 MAX_CONCURRENCY=50       # parallel SMS sends per cycle
 DATA_FOLDER=data
 DB_PATH=app/notified_users.db
-CSV_DOWNLOADER_ENABLED=false   # set true to auto-download CSVs from ALOT BI
 ```
 
 ## Run
@@ -38,12 +37,12 @@ CSV_DOWNLOADER_ENABLED=false   # set true to auto-download CSVs from ALOT BI
 | `/cancel` | POST | Cancel the running cycle |
 | `/health` | GET | Liveness check |
 
-The service watches `data/` and starts the notification cycle whenever a CSV file is created or modified. If a cycle is already running when a new file change arrives, the change is skipped.
+CSVs are ingested through the manual upload endpoint or by placing files in `data/`. Cycles run only when an operator starts them; changing a file in `data/` never starts a cycle on its own.
 
 ## How it works
 
-1. `watcher.py` detects CSV changes in `data/` and schedules a cycle on the event loop
-2. `processor.py` loads `Logins_*.csv` and `Registrations_*.csv`, finds the last login per user, and flags users inactive for >48h
+1. CSVs land in `data/` via manual upload; `ingestion.py` validates and stores them under a recognized dataset prefix
+2. `processor.py` loads `Login_*.csv` and `Registrations_*.csv`, finds the last login per user, and flags users inactive for >48h
 3. `database.py` tracks notified users in SQLite (dedupe + cooldown via `next_available_at`)
-4. `messager.py` sends SMS via Termii asynchronously, up to `MAX_CONCURRENCY` at a time
+4. `sms.py` sends SMS via Termii asynchronously, up to `MAX_CONCURRENCY` at a time
 5. Cancelling (`/cancel` or Ctrl+C) stops pending sends; already-sent notifications are still saved

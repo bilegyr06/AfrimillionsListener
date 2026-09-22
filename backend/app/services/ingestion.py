@@ -1,8 +1,8 @@
 """Data intake boundary: CSV discovery, reading, and (Phase 2) manual uploads.
 
-Every source of data — the Playwright scraper, manual UI uploads, files dropped
-into the data folder — converges on this module so the processing pipeline reads
-files one way and dataset definitions live in one place.
+Every source of data — manual UI uploads, files placed in the data folder —
+converges on this module so the processing pipeline reads files one way and
+dataset definitions live in one place.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import pandas as pd
 
 from app.core.config import settings
 
-# File-name prefixes produced by the auto-downloader and recognized datasets.
+# Recognized dataset file-name prefixes.
 KNOWN_PREFIXES = (
     "Login_",
     "Registrations_",

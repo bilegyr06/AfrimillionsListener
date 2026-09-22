@@ -7,7 +7,7 @@
 # Requirements:
 #   - Docker Desktop installed and running
 #   - docker authenticated to ghcr.io (run: docker login ghcr.io -u <github-username>)
-#   - .env file in this folder (copy from the project, contains Termii/ALOTBI credentials)
+#   - .env file in this folder (copy from the project, contains Termii credentials)
 #   - data\ and database\ folders in this folder (CSV drops and SQLite state)
 #
 # To pin a specific release instead of latest, set AFRI_VERSION before running, e.g.:

@@ -27,9 +27,6 @@ class Settings:
     # Infrastructure / secrets — never exposed through the operator API.
     TERMII_API_KEY: str = os.getenv("TERMII_API_KEY", "")
     TERMII_BASE_URL: str = os.getenv("TERMII_BASE_URL", "")
-    ALOTBI_URL: str = os.getenv("ALOTBI_URL", "").rstrip("/")
-    ALOTBI_USERNAME: str = os.getenv("ALOTBI_USERNAME", "")
-    ALOTBI_PASSWORD: str = os.getenv("ALOTBI_PASSWORD", "")
 
     # Operator-configurable settings. Defaults below are bootstrap values;
     # once the database is initialized, the settings table is the source of
@@ -68,8 +65,6 @@ class Settings:
     )
 
     # Data collection.
-    CSV_DOWNLOADER_ENABLED: bool = _parse_bool(os.getenv("CSV_DOWNLOADER_ENABLED", "true"), True)
-
     DATA_FOLDER: Path = BASE_DIR / os.getenv("DATA_FOLDER", "data")
     DB_PATH: Path = BASE_DIR / os.getenv("DB_PATH", "database/notified_users.db")
 

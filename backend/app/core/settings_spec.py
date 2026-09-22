@@ -77,6 +77,5 @@ SPECS: dict[str, SettingSpec] = {
         _spec("WELCOME_POST_LIMIT_SUPPRESS", "bool", "Suppress after cap", "Stop sending when a user has reached their cap.", "checkbox"),
         _spec("WELCOME_MESSAGE", "str", "Welcome SMS template", "Template with {first_name} placeholder.", "textarea"),
         _spec("INACTIVE_MESSAGE", "str", "Inactive SMS template", "Template with {first_name} placeholder.", "textarea"),
-        _spec("CSV_DOWNLOADER_ENABLED", "bool", "Auto CSV downloader", "Allow the scraper to download CSVs from ALOT BI.", "checkbox"),
     )
 }

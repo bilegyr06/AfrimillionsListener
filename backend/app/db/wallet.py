@@ -1,8 +1,7 @@
 """Wallet balance data module.
 
-Owns the wallet_log table (Termii balance snapshots). Consumers: the periodic
-wallet-snapshot task in app.workers.watcher and the reporting surfaces in
-app.main.
+Owns the wallet_log table (Termii balance snapshots). Consumers: the stats
+wallet reporting surfaces in app.routers.stats and app.main.
 """
 from __future__ import annotations
 

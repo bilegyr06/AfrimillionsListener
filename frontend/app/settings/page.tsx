@@ -30,11 +30,6 @@ const GROUPS: { label: string; hint: string; keys: string[] }[] = [
     hint: "When cycles may run. Changing these affects the next cycle.",
     keys: ["START_TIME", "END_TIME", "CYCLE_END_HOUR"],
   },
-  {
-    label: "Data collection",
-    hint: "How numbers are pulled in.",
-    keys: ["CSV_DOWNLOADER_ENABLED"],
-  },
 ];
 
 function Control({ setting, value, onChange }: { setting: SettingRow; value: string; onChange: (v: string) => void }) {

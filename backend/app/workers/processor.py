@@ -10,7 +10,7 @@ app.services.inactivity, both behind the same
 ``async pipeline(deadline, cycle_id, logins_df=None) -> dict`` contract the
 feature registry (app.core.features) exposes. The orchestrator only provisions
 the lifecycle; wallet balance snapshots are deliberately NOT a cycle side
-effect and run as a periodic task in app.workers.watcher.
+effect and are recorded on demand via the stats wallet endpoint.
 """
 from __future__ import annotations
 

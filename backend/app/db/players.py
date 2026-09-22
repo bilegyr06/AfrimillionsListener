@@ -2,8 +2,7 @@
 
 Owns the notified_users (notification cooldown state), pending_queue (users
 deferred to a future cycle) and plays (persistent player activity) tables.
-Consumers: the cycle processor, the file watcher, campaigns attribution and
-plays ingestion.
+Consumers: the cycle processor, campaigns attribution and plays ingestion.
 """
 from __future__ import annotations
 
